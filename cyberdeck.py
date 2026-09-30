@@ -630,7 +630,7 @@ def init_colors(theme=DEFAULT_THEME):
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
 REFRESH_CHOICES = (5, 10, 15, 30, 60)  # minutes
 MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "Theme", "FPS", "Rain", "Scanlines", "Glitch", "Glitch rate", "Boot intro")
-TITLE = "▌CYBERDECK//v6 ▐"
+TITLE = "▌CYBERDECK//v0.6▐"
 MENU = " [Q] quit   [S] settings "
 
 
