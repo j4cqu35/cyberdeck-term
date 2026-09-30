@@ -5,7 +5,7 @@ Python standard library only. System stats come from /proc, /sys, statvfs (what
 `df` uses) and, as a fallback for temperature, `sensors`. Weather comes from the
 Open-Meteo API (no API key needed).
 
-Keys:  q / Esc  quit   s  settings (city, units, air quality, FPS, rain, scanlines, glitch, boot intro)
+Keys:  q / Esc  quit   s  settings (city, units, air quality, theme, FPS, rain, scanlines, glitch, boot intro)
 
 Config lives at ~/.config/cyberdeck/config.json. With no city configured, the app
 asks for one at launch and saves it there.
@@ -37,6 +37,7 @@ DEFAULTS = {
     "show_seconds": False,
     "weather_refresh_minutes": 15,
     "air_quality": True,
+    "theme": "cyan-magenta",  # cyan-magenta | amber | matrix | mono | synthwave
     "boot_sequence": True,  # ~3s intro at launch; any key skips it
     "disk_path": "/",
     "glitch": {"enabled": True, "rate": 0.35},  # rate: clock glitch bursts per second, on average
@@ -523,13 +524,61 @@ def put(win, y, x, s, attr=0):
             pass
 
 
-RAIN_256 = (231, 157, 120, 84, 46, 40, 34, 28, 22, 235)  # white head -> green -> fades into the background
-FADE_C_256 = (23, 30, 37, 44, 51)  # dark -> bright cyan, for the boot text
-FADE_G_256 = (22, 28, 34, 40, 46)  # dark -> bright green
-GRADIENT_256 = (46, 82, 118, 154, 190, 226, 220, 214, 208, 202, 196)  # green -> yellow -> red
+# Each theme: 256-colour codes for the UI, four 256-colour ramps (rain trail head->tail, stat-bar
+# gradient low->high, two boot-text fades dark->bright), and plain names for 8-colour terminals.
+THEMES = {
+    "cyan-magenta": {
+        "name": "CYAN/MAGENTA",
+        "ui": dict(clock=51, date=201, border=201, label=51, weather=213, flash=231, dim=244, ok=46, warn=220, crit=196),
+        "rain": (231, 157, 120, 84, 46, 40, 34, 28, 22, 235),
+        "grad": (46, 82, 118, 154, 190, 226, 220, 214, 208, 202, 196),
+        "boot1": (23, 30, 37, 44, 51),
+        "boot2": (22, 28, 34, 40, 46),
+        "c8": dict(primary="CYAN", accent="MAGENTA", rain="GREEN", ok="GREEN", warn="YELLOW", crit="RED"),
+    },
+    "amber": {
+        "name": "AMBER",
+        "ui": dict(clock=214, date=208, border=172, label=178, weather=220, flash=230, dim=130, ok=178, warn=208, crit=196),
+        "rain": (230, 222, 220, 214, 208, 172, 136, 94, 58, 235),
+        "grad": (94, 130, 136, 172, 178, 214, 220, 226, 208, 202, 196),
+        "boot1": (52, 94, 130, 172, 214),
+        "boot2": (58, 94, 136, 178, 220),
+        "c8": dict(primary="YELLOW", accent="YELLOW", rain="YELLOW", ok="YELLOW", warn="YELLOW", crit="RED"),
+    },
+    "matrix": {
+        "name": "MATRIX",
+        "ui": dict(clock=46, date=40, border=34, label=40, weather=82, flash=231, dim=65, ok=46, warn=118, crit=231),
+        "rain": (231, 157, 120, 84, 46, 40, 34, 28, 22, 235),
+        "grad": (22, 28, 34, 40, 46, 82, 118, 120, 157, 194, 231),
+        "boot1": (22, 28, 34, 40, 46),
+        "boot2": (22, 28, 34, 40, 46),
+        "c8": dict(primary="GREEN", accent="GREEN", rain="GREEN", ok="GREEN", warn="GREEN", crit="WHITE"),
+    },
+    "mono": {
+        "name": "BLACK & WHITE",
+        "ui": dict(clock=255, date=250, border=244, label=252, weather=253, flash=231, dim=242, ok=250, warn=253, crit=231),
+        "rain": (231, 255, 252, 249, 246, 243, 240, 238, 236, 234),
+        "grad": (238, 240, 242, 244, 246, 248, 250, 252, 254, 255, 231),
+        "boot1": (236, 240, 244, 250, 255),
+        "boot2": (236, 240, 244, 250, 255),
+        "c8": dict(primary="WHITE", accent="WHITE", rain="WHITE", ok="WHITE", warn="WHITE", crit="WHITE"),
+    },
+    "synthwave": {
+        "name": "SYNTHWAVE",
+        "ui": dict(clock=199, date=51, border=93, label=141, weather=213, flash=231, dim=103, ok=51, warn=214, crit=197),
+        "rain": (231, 219, 213, 207, 171, 135, 99, 93, 54, 234),
+        "grad": (51, 45, 81, 141, 177, 213, 207, 201, 205, 203, 197),
+        "boot1": (53, 90, 127, 163, 199),
+        "boot2": (23, 30, 37, 44, 51),
+        "c8": dict(primary="MAGENTA", accent="CYAN", rain="MAGENTA", ok="CYAN", warn="YELLOW", crit="RED"),
+    },
+}
+THEME_ORDER = tuple(THEMES)
+DEFAULT_THEME = "cyan-magenta"
 
 
-def init_colors():
+def init_colors(theme=DEFAULT_THEME):
+    th = THEMES.get(theme) or THEMES[DEFAULT_THEME]
     curses.start_color()
     try:
         curses.use_default_colors()
@@ -537,17 +586,18 @@ def init_colors():
     except curses.error:
         bg = 0
     rich = curses.COLORS >= 256
-    G, C, M, Y, R, W = (curses.COLOR_GREEN, curses.COLOR_CYAN, curses.COLOR_MAGENTA,
-                        curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_WHITE)
+    c8 = {k: getattr(curses, "COLOR_" + v) for k, v in th["c8"].items()}
+    P, A8, RN, OK, WARN, CRIT = (c8[k] for k in ("primary", "accent", "rain", "ok", "warn", "crit"))
+    W, u = curses.COLOR_WHITE, th["ui"]
     spec = {
-        "flash": (231, W),
-        "clock": (51, C), "date": (201, M), "border": (201, M), "label": (51, C),
-        "ok": (46, G), "warn": (220, Y), "crit": (196, R), "dim": (244, W),
-        "weather": (213, M),
+        "flash": (u["flash"], W),
+        "clock": (u["clock"], P), "date": (u["date"], A8), "border": (u["border"], A8), "label": (u["label"], P),
+        "ok": (u["ok"], OK), "warn": (u["warn"], WARN), "crit": (u["crit"], CRIT), "dim": (u["dim"], W),
+        "weather": (u["weather"], A8),
     }
     attrs = {}
-    for i, (name, (c256, c8)) in enumerate(spec.items(), 1):
-        curses.init_pair(i, c256 if rich else c8, bg)
+    for i, (name, (c256, c8_)) in enumerate(spec.items(), 1):
+        curses.init_pair(i, c256 if rich else c8_, bg)
         attrs[name] = curses.color_pair(i)
     attrs["clock"] |= curses.A_BOLD
     attrs["flash"] |= curses.A_BOLD
@@ -557,29 +607,29 @@ def init_colors():
 
     def ramp(colours):  # [(256-colour, 8-colour, extra attr)] -> attrs
         out = []
-        for c256, c8, extra in colours:
-            curses.init_pair(next_pair[0], c256 if rich else c8, bg)
+        for c256, c8_, extra in colours:
+            curses.init_pair(next_pair[0], c256 if rich else c8_, bg)
             out.append(curses.color_pair(next_pair[0]) | extra)
             next_pair[0] += 1
         return out
 
     B, D = curses.A_BOLD, curses.A_DIM
     if rich:
-        attrs["rain"] = ramp([(c, G, 0) for c in RAIN_256])
-        attrs["grad"] = ramp([(c, G, 0) for c in GRADIENT_256])
-        attrs["fade_c"] = ramp([(c, C, 0) for c in FADE_C_256])
-        attrs["fade_g"] = ramp([(c, G, 0) for c in FADE_G_256])
+        attrs["rain"] = ramp([(c, RN, 0) for c in th["rain"]])
+        attrs["grad"] = ramp([(c, OK, 0) for c in th["grad"]])
+        attrs["fade_c"] = ramp([(c, P, 0) for c in th["boot1"]])
+        attrs["fade_g"] = ramp([(c, OK, 0) for c in th["boot2"]])
     else:
-        attrs["rain"] = ramp([(W, W, B), (G, G, B), (G, G, 0), (G, G, D)])
-        attrs["grad"] = ramp([(G, G, 0), (Y, Y, 0), (R, R, 0)])
-        attrs["fade_c"] = ramp([(C, C, D), (C, C, 0), (C, C, B)])
-        attrs["fade_g"] = ramp([(G, G, D), (G, G, 0), (G, G, B)])
+        attrs["rain"] = ramp([(W, W, B), (RN, RN, B), (RN, RN, 0), (RN, RN, D)])
+        attrs["grad"] = ramp([(OK, OK, 0), (WARN, WARN, 0), (CRIT, CRIT, 0)])
+        attrs["fade_c"] = ramp([(P, P, D), (P, P, 0), (P, P, B)])
+        attrs["fade_g"] = ramp([(OK, OK, D), (OK, OK, 0), (OK, OK, B)])
     return attrs
 
 
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
 REFRESH_CHOICES = (5, 10, 15, 30, 60)  # minutes
-MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "FPS", "Rain", "Scanlines", "Glitch", "Glitch rate", "Boot intro")
+MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "Theme", "FPS", "Rain", "Scanlines", "Glitch", "Glitch rate", "Boot intro")
 TITLE = "▌CYBERDECK//v6 ▐"
 MENU = " [Q] quit   [S] settings "
 
@@ -592,6 +642,7 @@ class App:
         self.scr, self.cfg, self.weather, self.stats = scr, cfg, weather, stats
         self.config_file = config_file
         self.fps = clamp_fps(cfg["fps"])
+        self.theme = cfg["theme"] if cfg["theme"] in THEMES else DEFAULT_THEME
         self.modal = None
         self.glitch = {"until": 0.0}  # the current burst
         self.boot_t0 = None  # set in run() while the boot sequence is playing
@@ -921,6 +972,7 @@ class App:
             "IMPERIAL" if self.weather.imperial else "METRIC",
             f"◀ {self.cfg['weather_refresh_minutes']} min ▶",
             onoff(self.cfg["air_quality"]),
+            f"◀ {THEMES[self.theme]['name']} ▶",
             f"◀ {self.fps} ▶",
             onoff(self.rain_cfg["enabled"]),
             onoff(self.rain_cfg["scanlines"]),
@@ -953,6 +1005,12 @@ class App:
             self.cfg["air_quality"] = self.weather.air_quality = not self.cfg["air_quality"]
             self.weather.wake.set()  # fetch (or stop fetching) right away
             save_config(self.config_file, {"air_quality": self.cfg["air_quality"]})
+        elif name == "Theme":
+            i = THEME_ORDER.index(self.theme)
+            self.theme = THEME_ORDER[(i + (-1 if d < 0 else 1)) % len(THEME_ORDER)]
+            self.A = init_colors(self.theme)
+            self.cfg["theme"] = self.theme
+            save_config(self.config_file, {"theme": self.theme})
         elif name == "FPS":
             self.fps = clamp_fps(self.fps + (d or 1) * FPS_STEP)
             self.cfg["fps"] = self.fps
@@ -1068,7 +1126,7 @@ class App:
 
     def run(self):
         curses.curs_set(0)
-        self.A = init_colors()
+        self.A = init_colors(self.theme)
         if not self.weather.has_location():
             self.open_city_prompt(first_run=True)
         last_stats, last_frame = 0.0, time.monotonic()
@@ -1108,6 +1166,7 @@ def main():
     ap.add_argument("--lat", type=float)
     ap.add_argument("--lon", type=float)
     ap.add_argument("--fps", type=int, help=f"frames per second ({FPS_MIN}-{FPS_MAX})")
+    ap.add_argument("--theme", choices=THEME_ORDER, help="colour theme")
     ap.add_argument("--units", choices=("metric", "imperial"))
     ap.add_argument("--12h", dest="h12", action="store_true", help="12-hour clock")
     ap.add_argument("--seconds", action="store_true", help="show seconds")
@@ -1127,6 +1186,8 @@ def main():
         cfg["location"] = {**cfg["location"], "lat": args.lat, "lon": args.lon}
     if args.fps:
         cfg["fps"] = args.fps
+    if args.theme:
+        cfg["theme"] = args.theme
     if args.units:
         cfg["units"] = args.units
     if args.h12:

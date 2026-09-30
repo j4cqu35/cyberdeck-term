@@ -56,6 +56,7 @@ apply immediately and are saved.
 | City | `Enter` to type a new city |
 | Units | Metric / imperial (any of `←`, `→`, `Enter` toggles) |
 | Weather refresh | How often weather is fetched: 5, 10, 15, 30 or 60 minutes |
+| Theme | Colour theme, see below (`←`/`→` cycle, applies live) |
 | Air quality | Show the air quality line on / off (`Enter` toggles) |
 | FPS | 5-60, in steps of 5 |
 | Rain | Matrix rain on / off (`Enter` toggles) |
@@ -70,6 +71,7 @@ apply immediately and are saved.
 | --- | --- |
 | `--city NAME` | Weather location by name (this run only) |
 | `--lat`, `--lon` | Weather location by coordinates |
+| `--theme NAME` | Colour theme: `cyan-magenta`, `amber`, `matrix`, `mono`, `synthwave` |
 | `--units {metric,imperial}` | Units for temperature and wind |
 | `--fps N` | Frames per second (5-60) |
 | `--12h` | 12-hour clock |
@@ -84,6 +86,18 @@ apply immediately and are saved.
 
 Flags apply to the current run only and are not saved.
 
+## Themes
+
+Pick one in settings, or with `--theme`. The choice is saved.
+
+| Theme | Look |
+| --- | --- |
+| `cyan-magenta` | Cyan clock and magenta accents over green rain (default) |
+| `amber` | Retro amber monochrome terminal |
+| `matrix` | Green only |
+| `mono` | Black and white |
+| `synthwave` | Hot pink, cyan and purple |
+
 ## Configuration
 
 Settings are stored in `~/.config/cyberdeck/config.json` (or under
@@ -95,6 +109,7 @@ to see the first-launch prompt again.
   "location": { "city": "London", "lat": null, "lon": null },
   "units": "metric",
   "fps": 30,
+  "theme": "cyan-magenta",
   "glitch": { "enabled": true, "rate": 0.35 },
   "clock_24h": true,
   "show_seconds": false,
@@ -110,6 +125,7 @@ to see the first-launch prompt again.
 | --- | --- |
 | `location` | City name, or `lat`/`lon` (which take priority) |
 | `units` | `metric` or `imperial` |
+| `theme` | `cyan-magenta` (default), `amber`, `matrix`, `mono` or `synthwave` |
 | `fps` | Frame rate, 5-60 |
 | `clock_24h` | `false` for a 12-hour clock |
 | `show_seconds` | Show seconds on the clock |
