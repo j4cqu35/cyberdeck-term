@@ -454,7 +454,6 @@ def init_colors():
     G, C, M, Y, R, W = (curses.COLOR_GREEN, curses.COLOR_CYAN, curses.COLOR_MAGENTA,
                         curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_WHITE)
     spec = {
-        "glow": (90, M),
         "clock": (51, C), "date": (201, M), "border": (201, M), "label": (51, C),
         "ok": (46, G), "warn": (220, Y), "crit": (196, R), "dim": (244, W),
         "weather": (213, M),
@@ -483,7 +482,6 @@ def init_colors():
     else:
         attrs["rain"] = ramp([(W, W, B), (G, G, B), (G, G, 0), (G, G, D)])
         attrs["grad"] = ramp([(G, G, 0), (Y, Y, 0), (R, R, 0)])
-        attrs["glow"] |= D
     return attrs
 
 
@@ -527,28 +525,8 @@ class App:
             rows = render_big(text, scale)
             if glitch:
                 rows = glitch_rows(rows)
-            return [self.glow_row(row) for row in rows]
+            return [[(row, A["clock"])] for row in rows]
         return [[(text.replace("_", "").strip(), A["clock"])]]
-
-    def glow_row(self, row):
-        """Clock row as coloured runs: bright digits with a dim magenta bloom either side."""
-        A = self.A
-        padded = " " + row + " "
-        segs = []
-        for i, ch in enumerate(padded):
-            left = i > 0 and padded[i - 1] != " "
-            right = i + 1 < len(padded) and padded[i + 1] != " "
-            if ch != " ":
-                cell = (ch, A["clock"])
-            elif left or right:
-                cell = ("░", A["glow"])
-            else:
-                cell = (" ", 0)
-            if segs and segs[-1][1] == cell[1]:
-                segs[-1] = (segs[-1][0] + cell[0], cell[1])
-            else:
-                segs.append(cell)
-        return segs
 
     def glitch_active(self):
         """Short bursts every few seconds; timed in seconds so it's FPS-independent."""
