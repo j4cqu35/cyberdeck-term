@@ -44,8 +44,6 @@ install -Dm755 cyberdeck.py ~/.local/bin/cyberdeck
 | Key | Action |
 | --- | --- |
 | `q` / `Esc` | Quit |
-| `r` | Refresh weather now |
-| `u` | Toggle metric / imperial |
 | `s` | Settings menu |
 
 In settings, `↑`/`↓` selects an item and `←`/`→` (or `-`/`+`) changes it. Changes
@@ -54,6 +52,8 @@ apply immediately and are saved.
 | Setting | Behaviour |
 | --- | --- |
 | City | `Enter` to type a new city |
+| Units | Metric / imperial (any of `←`, `→`, `Enter` toggles) |
+| Weather refresh | How often weather is fetched: 5, 10, 15, 30 or 60 minutes |
 | FPS | 5-60, in steps of 5 |
 | Rain | Matrix rain on / off (`Enter` toggles) |
 | Glitch | Clock glitch effect on / off (`Enter` toggles) |

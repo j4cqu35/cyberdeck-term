@@ -5,7 +5,7 @@ Python standard library only. System stats come from /proc, /sys, statvfs (what
 `df` uses) and, as a fallback for temperature, `sensors`. Weather comes from the
 Open-Meteo API (no API key needed).
 
-Keys:  q / Esc  quit   r  refresh weather   u  toggle metric / imperial   s  settings (city, FPS, rain, glitch)
+Keys:  q / Esc  quit   s  settings (city, units, FPS, rain, glitch)
 
 Config lives at ~/.config/cyberdeck/config.json. With no city configured, the app
 asks for one at launch and saves it there.
@@ -504,9 +504,10 @@ def init_colors():
 
 
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
-MENU_ITEMS = ("City", "FPS", "Rain", "Glitch", "Glitch rate")
+REFRESH_CHOICES = (5, 10, 15, 30, 60)  # minutes
+MENU_ITEMS = ("City", "Units", "Weather refresh", "FPS", "Rain", "Glitch", "Glitch rate")
 TITLE = "▌CYBERDECK//v6 ▐"
-MENU = " [Q] quit   [R] refresh   [U] units   [S] settings "
+MENU = " [Q] quit   [S] settings "
 
 
 EIGHTHS = " ▏▎▍▌▋▊▉"
@@ -776,6 +777,8 @@ class App:
         onoff = lambda on: "ON" if on else "OFF"
         return [
             (self.cfg["location"].get("city") or "NOT SET").upper(),
+            "IMPERIAL" if self.weather.imperial else "METRIC",
+            f"◀ {self.cfg['weather_refresh_minutes']} min ▶",
             f"◀ {self.fps} ▶",
             onoff(self.rain_cfg["enabled"]),
             onoff(g["enabled"]),
@@ -784,21 +787,35 @@ class App:
 
     def change_setting(self, idx, d):
         """d is -1 / +1 for left / right, 0 for Enter. Every change applies live and is saved."""
-        g = self.cfg["glitch"]
-        if idx == 0:
+        name, g = MENU_ITEMS[idx], self.cfg["glitch"]
+        if name == "City":
             if d == 0:
                 self.open_city_prompt(back=True)
-        elif idx == 1:
+        elif name == "Units":
+            self.weather.toggle_units()  # also re-fetches the weather in the new units
+            self.cfg["units"] = "imperial" if self.weather.imperial else "metric"
+            save_config(self.config_file, {"units": self.cfg["units"]})
+        elif name == "Weather refresh":
+            cur = self.cfg["weather_refresh_minutes"]
+            if d >= 0:  # Enter cycles upward and wraps
+                mins = next((m for m in REFRESH_CHOICES if m > cur), REFRESH_CHOICES[0])
+            else:
+                mins = next((m for m in reversed(REFRESH_CHOICES) if m < cur), REFRESH_CHOICES[-1])
+            self.cfg["weather_refresh_minutes"] = mins
+            self.weather.refresh = mins * 60
+            self.weather.wake.set()  # re-fetch now so the new interval starts from here
+            save_config(self.config_file, {"weather_refresh_minutes": mins})
+        elif name == "FPS":
             self.fps = clamp_fps(self.fps + (d or 1) * FPS_STEP)
             self.cfg["fps"] = self.fps
             save_config(self.config_file, {"fps": self.fps})
-        elif idx == 2:
+        elif name == "Rain":
             self.rain_cfg["enabled"] = not self.rain_cfg["enabled"]
             save_config(self.config_file, {"rain": {"enabled": self.rain_cfg["enabled"]}})
-        elif idx == 3:
+        elif name == "Glitch":
             g["enabled"] = not g["enabled"]
             save_config(self.config_file, {"glitch": {"enabled": g["enabled"]}})
-        elif idx == 4:
+        elif name == "Glitch rate":
             g["rate"] = round(max(GLITCH_MIN, min(GLITCH_MAX, g["rate"] + (d or 1) * GLITCH_STEP)), 2)
             save_config(self.config_file, {"glitch": {"rate": g["rate"]}})
 
@@ -819,7 +836,7 @@ class App:
             rows = [top("[ SETTINGS ]")]
             for i, (name, value) in enumerate(zip(MENU_ITEMS, self.menu_values())):
                 sel = i == m["sel"]
-                text = f" {'▶' if sel else ' '} {name:<12}" + value[: inner - 16].rjust(inner - 15)
+                text = f" {'▶' if sel else ' '} {name:<16}" + value[: inner - 20].rjust(inner - 19)
                 rows.append(line(text, A["clock"] if sel else A["label"]))
             rows.append(line(" ↑↓ select · ←→/ENTER change · ESC close", A["dim"]))
             return rows + [bottom]
@@ -913,10 +930,6 @@ class App:
                     self.modal_key(key)
             elif key in ("q", "Q", "\x1b"):
                 return
-            elif key in ("r", "R"):
-                self.weather.wake.set()
-            elif key in ("u", "U"):
-                self.weather.toggle_units()
             elif key in ("s", "S"):
                 self.open_menu()
             now = time.monotonic()
