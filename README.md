@@ -54,6 +54,7 @@ apply immediately and are saved.
 | City | `Enter` to type a new city |
 | Units | Metric / imperial (any of `←`, `→`, `Enter` toggles) |
 | Weather refresh | How often weather is fetched: 5, 10, 15, 30 or 60 minutes |
+| Air quality | Show the air quality line on / off (`Enter` toggles) |
 | FPS | 5-60, in steps of 5 |
 | Rain | Matrix rain on / off (`Enter` toggles) |
 | Glitch | Clock glitch effect on / off (`Enter` toggles) |
@@ -71,6 +72,7 @@ apply immediately and are saved.
 | `--seconds` | Show seconds |
 | `--ascii` | ASCII rain instead of katakana (use this if your font shows boxes) |
 | `--no-rain` | Disable the background |
+| `--no-air-quality` | Hide air quality |
 | `--no-glitch` | Disable the clock glitch |
 | `--config PATH` | Use a different config file |
 
@@ -91,6 +93,7 @@ to see the first-launch prompt again.
   "clock_24h": true,
   "show_seconds": false,
   "weather_refresh_minutes": 15,
+  "air_quality": true,
   "disk_path": "/",
   "rain": { "enabled": true, "charset": "katakana", "speed": 1.0 }
 }
@@ -104,6 +107,7 @@ to see the first-launch prompt again.
 | `clock_24h` | `false` for a 12-hour clock |
 | `show_seconds` | Show seconds on the clock |
 | `weather_refresh_minutes` | How often weather is fetched |
+| `air_quality` | Show air quality (US AQI and PM2.5) in the weather area |
 | `disk_path` | Mount point shown in the disk bar |
 | `glitch.enabled` | Occasional glitch bursts on the clock |
 | `glitch.rate` | Average bursts per second (0.05-2.0) |

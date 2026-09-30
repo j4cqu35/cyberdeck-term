@@ -5,7 +5,7 @@ Python standard library only. System stats come from /proc, /sys, statvfs (what
 `df` uses) and, as a fallback for temperature, `sensors`. Weather comes from the
 Open-Meteo API (no API key needed).
 
-Keys:  q / Esc  quit   s  settings (city, units, FPS, rain, glitch)
+Keys:  q / Esc  quit   s  settings (city, units, air quality, FPS, rain, glitch)
 
 Config lives at ~/.config/cyberdeck/config.json. With no city configured, the app
 asks for one at launch and saves it there.
@@ -36,6 +36,7 @@ DEFAULTS = {
     "clock_24h": True,
     "show_seconds": False,
     "weather_refresh_minutes": 15,
+    "air_quality": True,
     "disk_path": "/",
     "glitch": {"enabled": True, "rate": 0.35},  # rate: clock glitch bursts per second, on average
     "rain": {"enabled": True, "charset": "katakana", "speed": 1.0},  # katakana | ascii
@@ -230,6 +231,17 @@ WMO = {
 }
 
 
+# US AQI bands: (upper bound, label, colour)
+AQI_BANDS = (
+    (50, "GOOD", "ok"), (100, "MODERATE", "warn"), (150, "UNHEALTHY FOR SOME", "warn"),
+    (200, "UNHEALTHY", "crit"), (300, "VERY UNHEALTHY", "crit"), (10**9, "HAZARDOUS", "crit"),
+)
+
+
+def aqi_band(aqi):
+    return next(b for b in AQI_BANDS if aqi <= b[0])
+
+
 def http_json(url, params):
     req = urllib.request.Request(
         url + "?" + urllib.parse.urlencode(params), headers={"User-Agent": "cyberdeck/1.0"}
@@ -263,6 +275,7 @@ class Weather(threading.Thread):
         self.loc = cfg["location"]
         self.refresh = max(1, cfg["weather_refresh_minutes"]) * 60
         self.imperial = cfg["units"] == "imperial"
+        self.air_quality = cfg["air_quality"]
         self.data = None
         self.error = None
         self.place = None
@@ -313,6 +326,15 @@ class Weather(threading.Thread):
             },
         )
         cur, day = js["current"], js["daily"]
+        aq = {}
+        if self.air_quality:
+            try:  # separate API, missing in some places; never let it sink the weather
+                aq = http_json(
+                    "https://air-quality-api.open-meteo.com/v1/air-quality",
+                    {"latitude": lat, "longitude": lon, "current": "us_aqi,pm2_5", "timezone": "auto"},
+                )["current"]
+            except Exception:
+                pass
         if gen != self._gen:  # city changed while we were fetching
             return
         self.place = place
@@ -324,6 +346,8 @@ class Weather(threading.Thread):
             "desc": WMO.get(cur["weather_code"], "UNKNOWN"),
             "hi": day["temperature_2m_max"][0],
             "lo": day["temperature_2m_min"][0],
+            "aqi": aq.get("us_aqi"),
+            "pm25": aq.get("pm2_5"),
             "imperial": imperial,
         }
 
@@ -505,7 +529,7 @@ def init_colors():
 
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
 REFRESH_CHOICES = (5, 10, 15, 30, 60)  # minutes
-MENU_ITEMS = ("City", "Units", "Weather refresh", "FPS", "Rain", "Glitch", "Glitch rate")
+MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "FPS", "Rain", "Glitch", "Glitch rate")
 TITLE = "▌CYBERDECK//v6 ▐"
 MENU = " [Q] quit   [S] settings "
 
@@ -587,11 +611,24 @@ class App:
         main = f"{d['temp']:.0f}°{u}  {d['desc']}  H{d['hi']:.0f}° L{d['lo']:.0f}°"
         if lines == 1:
             return [[(f"{place}  {main}{stale}", A["weather"])]]
-        return [
+        rows = [
             [(f"// {place}{stale} //", A["border"])],
             [(main, A["weather"])],
             [(f"FEELS {d['feels']:.0f}°  HUM {d['hum']:.0f}%  WIND {d['wind']:.0f} {speed}", A["dim"])],
         ]
+        if lines >= 4 and self.cfg["air_quality"]:
+            rows.append(self.air_quality_row(d))
+        return rows
+
+    def air_quality_row(self, d):
+        A = self.A
+        if d.get("aqi") is None:
+            return [("AIR QUALITY  N/A", A["dim"])]
+        _, label, colour = aqi_band(d["aqi"])
+        segs = [("AIR QUALITY ", A["dim"]), (f"{d['aqi']:.0f} {label}", A[colour])]
+        if d.get("pm25") is not None:
+            segs.append((f"  PM2.5 {d['pm25']:.0f}", A["dim"]))
+        return segs
 
     def stat_values(self):
         """[(label, fraction, text, level)] for every stat."""
@@ -661,7 +698,8 @@ class App:
         box_ok = w >= INNER_W + 4
         candidates = [(0, 1, False)]
         if scale:
-            candidates = [(scale, 3, box_ok), (scale, 3, False), (scale, 1, False)] + candidates
+            full = 4 if self.cfg["air_quality"] else 3  # weather lines
+            candidates = [(scale, full, box_ok), (scale, full, False), (scale, 3, False), (scale, 1, False)] + candidates
         for sc, wlines, box in candidates:
             sections = [
                 self.clock_rows(now, sc, glitch),
@@ -779,6 +817,7 @@ class App:
             (self.cfg["location"].get("city") or "NOT SET").upper(),
             "IMPERIAL" if self.weather.imperial else "METRIC",
             f"◀ {self.cfg['weather_refresh_minutes']} min ▶",
+            onoff(self.cfg["air_quality"]),
             f"◀ {self.fps} ▶",
             onoff(self.rain_cfg["enabled"]),
             onoff(g["enabled"]),
@@ -805,6 +844,10 @@ class App:
             self.weather.refresh = mins * 60
             self.weather.wake.set()  # re-fetch now so the new interval starts from here
             save_config(self.config_file, {"weather_refresh_minutes": mins})
+        elif name == "Air quality":
+            self.cfg["air_quality"] = self.weather.air_quality = not self.cfg["air_quality"]
+            self.weather.wake.set()  # fetch (or stop fetching) right away
+            save_config(self.config_file, {"air_quality": self.cfg["air_quality"]})
         elif name == "FPS":
             self.fps = clamp_fps(self.fps + (d or 1) * FPS_STEP)
             self.cfg["fps"] = self.fps
@@ -954,6 +997,7 @@ def main():
     ap.add_argument("--seconds", action="store_true", help="show seconds")
     ap.add_argument("--ascii", action="store_true", help="ASCII rain instead of katakana")
     ap.add_argument("--no-rain", action="store_true")
+    ap.add_argument("--no-air-quality", action="store_true", help="hide air quality")
     ap.add_argument("--no-glitch", action="store_true", help="disable the clock glitch")
     args = ap.parse_args()
 
@@ -973,6 +1017,8 @@ def main():
         cfg["show_seconds"] = True
     if args.ascii:
         cfg["rain"]["charset"] = "ascii"
+    if args.no_air_quality:
+        cfg["air_quality"] = False
     if args.no_glitch:
         cfg["glitch"]["enabled"] = False
     if args.no_rain:
