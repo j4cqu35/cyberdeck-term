@@ -5,7 +5,7 @@ Python standard library only. System stats come from /proc, /sys, statvfs (what
 `df` uses) and, as a fallback for temperature, `sensors`. Weather comes from the
 Open-Meteo API (no API key needed).
 
-Keys:  q / Esc  quit   r  refresh weather   u  toggle metric / imperial   s  settings (city, FPS)
+Keys:  q / Esc  quit   r  refresh weather   u  toggle metric / imperial   s  settings (city, FPS, rain, glitch)
 
 Config lives at ~/.config/cyberdeck/config.json. With no city configured, the app
 asks for one at launch and saves it there.
@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 FPS_MIN, FPS_MAX, FPS_STEP = 5, 60, 5
+GLITCH_MIN, GLITCH_MAX, GLITCH_STEP = 0.05, 2.0, 0.05  # bursts per second
 
 DEFAULTS = {
     "location": {"city": None, "lat": None, "lon": None},  # asked for on first launch
@@ -35,6 +36,7 @@ DEFAULTS = {
     "show_seconds": False,
     "weather_refresh_minutes": 15,
     "disk_path": "/",
+    "glitch": {"enabled": True, "rate": 0.35},  # rate: clock glitch bursts per second, on average
     "rain": {"enabled": True, "charset": "katakana", "speed": 1.0},  # katakana | ascii
 }
 
@@ -79,7 +81,7 @@ def save_config(path, updates):
     """Persist changed settings, leaving the rest of the file (and CLI overrides) alone."""
     try:
         data = json.loads(path.read_text()) if path.exists() else copy.deepcopy(DEFAULTS)
-        data.update(updates)
+        data = deep_merge(data, updates)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2) + "\n")
     except (OSError, ValueError):
@@ -348,6 +350,31 @@ def render_big(text, scale):
     return [r[:-scale] for r in rows]
 
 
+GLITCH_CHARS = "▓▒░▀▄"
+
+
+def glitch_rows(rows):
+    """Tear the clock: shift rows sideways, tear one band hard, corrupt a few cells."""
+    band = random.randrange(len(rows))
+    out = []
+    for i, row in enumerate(rows):
+        if i == band:
+            dx = random.choice((-6, -5, 5, 6))
+        else:
+            dx = random.choice((-3, -2, -1, 1, 2, 3)) if random.random() < 0.35 else 0
+        if dx > 0:
+            row = " " * dx + row[:-dx]
+        elif dx < 0:
+            row = row[-dx:] + " " * -dx
+        out.append("".join(
+            random.choice(GLITCH_CHARS) if (ch == "█" and random.random() < 0.06)
+            else "▒" if (ch == " " and random.random() < 0.004)
+            else ch
+            for ch in row
+        ))
+    return out
+
+
 # -------------------------------------------------------------- the rain ----
 
 KATAKANA = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:.=*+-<>"
@@ -442,6 +469,7 @@ def init_colors():
 
 
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
+MENU_ITEMS = ("City", "FPS", "Rain", "Glitch", "Glitch rate")
 MENU = " [Q] quit   [R] refresh   [U] units   [S] settings "
 
 
@@ -456,6 +484,7 @@ class App:
         self.config_file = config_file
         self.fps = clamp_fps(cfg["fps"])
         self.modal = None
+        self.glitch_until = 0.0
         self.rain = None
         self.rain_cfg = cfg["rain"]
         self.chars = ASCII if self.rain_cfg["charset"] == "ascii" else KATAKANA
@@ -477,10 +506,25 @@ class App:
             text = "_" + text[1:]
         if now.microsecond >= 500_000:  # blink the colons
             text = text.replace(":", " ")
-        attr = A["date"] if glitch else A["clock"]
         if scale:
-            return [[(row, attr)] for row in render_big(text, scale)]
-        return [[(text.replace("_", "").strip(), attr)]]
+            rows = render_big(text, scale)
+            if glitch:
+                rows = glitch_rows(rows)
+            return [[(row, A["clock"])] for row in rows]
+        return [[(text.replace("_", "").strip(), A["clock"])]]
+
+    def glitch_active(self):
+        """Short bursts every few seconds; timed in seconds so it's FPS-independent."""
+        g = self.cfg["glitch"]
+        if not g["enabled"]:
+            return False
+        t = time.monotonic()
+        if t < self.glitch_until:
+            return True
+        if random.random() < g["rate"] / self.fps:
+            self.glitch_until = t + random.uniform(0.15, 0.4)
+            return True
+        return False
 
     def date_row(self, now):
         s = now.strftime("%A  %d %B %Y").upper()
@@ -559,7 +603,7 @@ class App:
 
     def build(self, h, w, now):
         """Pick the richest layout that fits the terminal."""
-        glitch = random.random() < 0.015
+        glitch = self.glitch_active()
         scale = 0
         for s in (2, 1):
             if len(render_big(now.strftime("%H:%M:%S" if self.cfg["show_seconds"] else "%H:%M"), s)[0]) + 4 <= w:
@@ -631,10 +675,36 @@ class App:
             "text": self.cfg["location"].get("city") or "",
         }
 
-    def set_fps(self, value):
-        self.fps = clamp_fps(value)
-        self.cfg["fps"] = self.fps
-        save_config(self.config_file, {"fps": self.fps})
+    def menu_values(self):
+        g = self.cfg["glitch"]
+        onoff = lambda on: "ON" if on else "OFF"
+        return [
+            (self.cfg["location"].get("city") or "NOT SET").upper(),
+            f"◀ {self.fps} ▶",
+            onoff(self.rain_cfg["enabled"]),
+            onoff(g["enabled"]),
+            f"◀ {g['rate']:.2f}/s ▶",
+        ]
+
+    def change_setting(self, idx, d):
+        """d is -1 / +1 for left / right, 0 for Enter. Every change applies live and is saved."""
+        g = self.cfg["glitch"]
+        if idx == 0:
+            if d == 0:
+                self.open_city_prompt(back=True)
+        elif idx == 1:
+            self.fps = clamp_fps(self.fps + (d or 1) * FPS_STEP)
+            self.cfg["fps"] = self.fps
+            save_config(self.config_file, {"fps": self.fps})
+        elif idx == 2:
+            self.rain_cfg["enabled"] = not self.rain_cfg["enabled"]
+            save_config(self.config_file, {"rain": {"enabled": self.rain_cfg["enabled"]}})
+        elif idx == 3:
+            g["enabled"] = not g["enabled"]
+            save_config(self.config_file, {"glitch": {"enabled": g["enabled"]}})
+        elif idx == 4:
+            g["rate"] = round(max(GLITCH_MIN, min(GLITCH_MAX, g["rate"] + (d or 1) * GLITCH_STEP)), 2)
+            save_config(self.config_file, {"glitch": {"rate": g["rate"]}})
 
     def modal_rows(self, w):
         A, m = self.A, self.modal
@@ -650,14 +720,12 @@ class App:
         bottom = [("╚" + "═" * inner + "╝", b)]
 
         if m["kind"] == "menu":
-            city = (self.cfg["location"].get("city") or "NOT SET").upper()
-            items = [("City", city), ("FPS", f"◀ {self.fps} ▶")]
             rows = [top("[ SETTINGS ]")]
-            for i, (name, value) in enumerate(items):
+            for i, (name, value) in enumerate(zip(MENU_ITEMS, self.menu_values())):
                 sel = i == m["sel"]
-                text = f" {'▶' if sel else ' '} {name:<6}" + value[: inner - 10].rjust(inner - 9)
+                text = f" {'▶' if sel else ' '} {name:<12}" + value[: inner - 16].rjust(inner - 15)
                 rows.append(line(text, A["clock"] if sel else A["label"]))
-            rows.append(line(" ↑↓ select · ←→ adjust · ENTER edit · ESC", A["dim"]))
+            rows.append(line(" ↑↓ select · ←→/ENTER change · ESC close", A["dim"]))
             return rows + [bottom]
 
         cursor = "█" if int(time.time() * 2) % 2 == 0 and not m["busy"] else " "
@@ -688,14 +756,16 @@ class App:
         if m["kind"] == "menu":
             if key == "\x1b":
                 self.modal = None
-            elif key in (curses.KEY_UP, curses.KEY_DOWN, "\t"):
-                m["sel"] = 1 - m["sel"]
-            elif m["sel"] == 0 and enter:
-                self.open_city_prompt(back=True)
-            elif m["sel"] == 1 and (key in (curses.KEY_RIGHT, "+", "=") or enter):
-                self.set_fps(self.fps + FPS_STEP)
-            elif m["sel"] == 1 and key in (curses.KEY_LEFT, "-", "_"):
-                self.set_fps(self.fps - FPS_STEP)
+            elif key == curses.KEY_UP:
+                m["sel"] = (m["sel"] - 1) % len(MENU_ITEMS)
+            elif key in (curses.KEY_DOWN, "\t"):
+                m["sel"] = (m["sel"] + 1) % len(MENU_ITEMS)
+            elif key in (curses.KEY_LEFT, "-", "_"):
+                self.change_setting(m["sel"], -1)
+            elif key in (curses.KEY_RIGHT, "+", "="):
+                self.change_setting(m["sel"], 1)
+            elif enter:
+                self.change_setting(m["sel"], 0)
         elif key == "\x1b":
             if m["back"]:
                 self.open_menu()
@@ -775,6 +845,7 @@ def main():
     ap.add_argument("--seconds", action="store_true", help="show seconds")
     ap.add_argument("--ascii", action="store_true", help="ASCII rain instead of katakana")
     ap.add_argument("--no-rain", action="store_true")
+    ap.add_argument("--no-glitch", action="store_true", help="disable the clock glitch")
     args = ap.parse_args()
 
     config_file = config_path(args.config)
@@ -793,6 +864,8 @@ def main():
         cfg["show_seconds"] = True
     if args.ascii:
         cfg["rain"]["charset"] = "ascii"
+    if args.no_glitch:
+        cfg["glitch"]["enabled"] = False
     if args.no_rain:
         cfg["rain"]["enabled"] = False
 

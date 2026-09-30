@@ -9,6 +9,8 @@ system stats over a cyberpunk "matrix rain" background.
   [Open-Meteo](https://open-meteo.com/). No API key needed.
 - **System stats:** CPU, memory, disk, temperature and battery, with bars that go
   green, yellow and red.
+- **Glitch:** the clock occasionally tears and corrupts for a fraction of a second.
+  Rate is adjustable, or turn it off.
 - **Matrix rain:** falling katakana (or ASCII) in the background, with an adjustable
   frame rate. It can be turned off.
 
@@ -46,9 +48,16 @@ install -Dm755 cyberdeck.py ~/.local/bin/cyberdeck
 | `u` | Toggle metric / imperial |
 | `s` | Settings menu |
 
-In settings, `↑`/`↓` selects an item. Press `Enter` on **City** to change it.
-On **FPS**, use `←`/`→` (or `-`/`+`) to adjust in steps of 5, from 5 to 60.
-Changes apply immediately and are saved.
+In settings, `↑`/`↓` selects an item and `←`/`→` (or `-`/`+`) changes it. Changes
+apply immediately and are saved.
+
+| Setting | Behaviour |
+| --- | --- |
+| City | `Enter` to type a new city |
+| FPS | 5-60, in steps of 5 |
+| Rain | Matrix rain on / off (`Enter` toggles) |
+| Glitch | Clock glitch effect on / off (`Enter` toggles) |
+| Glitch rate | Average bursts per second, 0.05-2.00 |
 
 ### Options
 
@@ -62,6 +71,7 @@ Changes apply immediately and are saved.
 | `--seconds` | Show seconds |
 | `--ascii` | ASCII rain instead of katakana (use this if your font shows boxes) |
 | `--no-rain` | Disable the background |
+| `--no-glitch` | Disable the clock glitch |
 | `--config PATH` | Use a different config file |
 
 Flags apply to the current run only and are not saved.
@@ -77,6 +87,7 @@ to see the first-launch prompt again.
   "location": { "city": "London", "lat": null, "lon": null },
   "units": "metric",
   "fps": 30,
+  "glitch": { "enabled": true, "rate": 0.35 },
   "clock_24h": true,
   "show_seconds": false,
   "weather_refresh_minutes": 15,
@@ -94,6 +105,8 @@ to see the first-launch prompt again.
 | `show_seconds` | Show seconds on the clock |
 | `weather_refresh_minutes` | How often weather is fetched |
 | `disk_path` | Mount point shown in the disk bar |
+| `glitch.enabled` | Occasional glitch bursts on the clock |
+| `glitch.rate` | Average bursts per second (0.05-2.0) |
 | `rain.enabled` | Show the matrix rain |
 | `rain.charset` | `katakana` or `ascii` |
 | `rain.speed` | Rain speed multiplier |
