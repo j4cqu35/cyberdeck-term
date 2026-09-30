@@ -9,8 +9,9 @@ system stats over a cyberpunk "matrix rain" background.
   [Open-Meteo](https://open-meteo.com/). No API key needed.
 - **System stats:** CPU, memory, disk, temperature and battery, with bars that go
   green, yellow and red.
-- **Glitch:** the clock occasionally tears and corrupts for a fraction of a second.
-  Rate is adjustable, or turn it off.
+- **Glitch:** the clock occasionally tears, corrupts, splits into offset cyan and magenta
+  copies, and drops out in scan-line flickers, all for a fraction of a second. Rate is
+  adjustable, or turn it off.
 - **Matrix rain:** falling katakana (or ASCII) in the background, with an adjustable
   frame rate. It can be turned off.
 

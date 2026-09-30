@@ -392,6 +392,39 @@ def render_big(text, scale):
     return [r[:-scale] for r in rows]
 
 
+def split_rows(rows, dx, cyan, magenta, both):
+    """Chromatic split: a cyan copy and a magenta copy 2*dx columns apart; white where they overlap."""
+    pad = " " * (2 * dx)
+    out = []
+    for row in rows:
+        segs = []
+        for a, b in zip(row + pad, pad + row):
+            if a != " " and b != " ":
+                cell = (a, both)
+            elif a != " ":
+                cell = (a, cyan)
+            elif b != " ":
+                cell = (b, magenta)
+            else:
+                cell = (" ", 0)
+            if segs and segs[-1][1] == cell[1]:
+                segs[-1] = (segs[-1][0] + cell[0], cell[1])
+            else:
+                segs.append(cell)
+        out.append(segs)
+    return out
+
+
+def scan_flicker(rows, dim, flash):
+    """Horizontal scan-line flicker: one or two rows drop out, dim or flash white."""
+    rows = list(rows)
+    mode = random.choice(("blank", "dim", "flash"))
+    for i in random.sample(range(len(rows)), random.choice((1, 2))):
+        text = "".join(t for t, _ in rows[i])
+        rows[i] = [(" " * len(text), 0)] if mode == "blank" else [(text, dim if mode == "dim" else flash)]
+    return rows
+
+
 GLITCH_CHARS = "▓▒░▀▄"
 
 
@@ -496,6 +529,7 @@ def init_colors():
     G, C, M, Y, R, W = (curses.COLOR_GREEN, curses.COLOR_CYAN, curses.COLOR_MAGENTA,
                         curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_WHITE)
     spec = {
+        "flash": (231, W),
         "clock": (51, C), "date": (201, M), "border": (201, M), "label": (51, C),
         "ok": (46, G), "warn": (220, Y), "crit": (196, R), "dim": (244, W),
         "weather": (213, M),
@@ -505,6 +539,7 @@ def init_colors():
         curses.init_pair(i, c256 if rich else c8, bg)
         attrs[name] = curses.color_pair(i)
     attrs["clock"] |= curses.A_BOLD
+    attrs["flash"] |= curses.A_BOLD
     attrs["date"] |= curses.A_BOLD
 
     next_pair = [len(spec) + 1]
@@ -543,7 +578,7 @@ class App:
         self.config_file = config_file
         self.fps = clamp_fps(cfg["fps"])
         self.modal = None
-        self.glitch_until = 0.0
+        self.glitch = {"until": 0.0}  # the current burst
         self.rain = None
         self.rain_cfg = cfg["rain"]
         self.chars = ASCII if self.rain_cfg["charset"] == "ascii" else KATAKANA
@@ -555,7 +590,7 @@ class App:
             return "crit" if pct <= 15 else "warn" if pct <= 30 else "ok"
         return "crit" if pct >= 90 else "warn" if pct >= 70 else "ok"
 
-    def clock_rows(self, now, scale, glitch):
+    def clock_rows(self, now, scale, glitch, w):
         A = self.A
         fmt = "%H:%M" if self.cfg["clock_24h"] else "%I:%M"
         if self.cfg["show_seconds"]:
@@ -567,23 +602,43 @@ class App:
             text = text.replace(":", " ")
         if scale:
             rows = render_big(text, scale)
-            if glitch:
+            if glitch and glitch["tear"]:
                 rows = glitch_rows(rows)
-            return [[(row, A["clock"])] for row in rows]
+            dx = min(glitch["split"], (w - len(rows[0]) - 4) // 2) if glitch else 0
+            if dx > 0:
+                segs = split_rows(rows, dx, A["clock"], A["date"], A["flash"])
+            else:
+                segs = [[(row, A["clock"])] for row in rows]
+            if glitch and glitch["scan"]:
+                segs = scan_flicker(segs, A["dim"], A["flash"])
+            return segs
         return [[(text.replace("_", "").strip(), A["clock"])]]
 
-    def glitch_active(self):
-        """Short bursts every few seconds; timed in seconds so it's FPS-independent."""
-        g = self.cfg["glitch"]
-        if not g["enabled"]:
-            return False
-        t = time.monotonic()
-        if t < self.glitch_until:
-            return True
-        if random.random() < g["rate"] / self.fps:
-            self.glitch_until = t + random.uniform(0.15, 0.4)
-            return True
-        return False
+    def glitch_effects(self):
+        """The clock's effects for this frame, or None. Bursts are timed in seconds, so FPS doesn't matter.
+
+        A burst tears the clock; some bursts also get a brief chromatic split and/or scan-line
+        flicker. Roughly one burst in four is a scan-line flicker on its own.
+        """
+        if not self.cfg["glitch"]["enabled"]:
+            return None
+        t, burst = time.monotonic(), self.glitch
+        if t >= burst["until"]:
+            if random.random() >= self.cfg["glitch"]["rate"] / self.fps:
+                return None
+            scan_only = random.random() < 0.25
+            burst = self.glitch = {
+                "until": t + (random.uniform(0.1, 0.25) if scan_only else random.uniform(0.2, 0.45)),
+                "tear": not scan_only,
+                "split_until": t + random.uniform(0.08, 0.2) if not scan_only and random.random() < 0.6 else 0.0,
+                "dx": random.choice((1, 1, 2)),  # copies end up 2*dx columns apart
+                "scan": scan_only or random.random() < 0.5,
+            }
+        return {
+            "tear": burst["tear"],
+            "split": burst["dx"] if t < burst["split_until"] else 0,
+            "scan": burst["scan"] and random.random() < 0.4,  # flickers on and off within the burst
+        }
 
     def date_row(self, now):
         s = now.strftime("%A  %d %B %Y").upper()
@@ -689,7 +744,7 @@ class App:
 
     def build(self, h, w, now):
         """Pick the richest layout that fits the terminal."""
-        glitch = self.glitch_active()
+        glitch = self.glitch_effects()
         scale = 0
         for s in (2, 1):
             if len(render_big(now.strftime("%H:%M:%S" if self.cfg["show_seconds"] else "%H:%M"), s)[0]) + 4 <= w:
@@ -702,7 +757,7 @@ class App:
             candidates = [(scale, full, box_ok), (scale, full, False), (scale, 3, False), (scale, 1, False)] + candidates
         for sc, wlines, box in candidates:
             sections = [
-                self.clock_rows(now, sc, glitch),
+                self.clock_rows(now, sc, glitch, w),
                 self.date_row(now),
                 self.weather_rows(wlines),
                 self.stats_box() if box else self.stats_line(),
