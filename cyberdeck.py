@@ -377,6 +377,8 @@ def glitch_rows(rows):
 
 # -------------------------------------------------------------- the rain ----
 
+HALO_HIDDEN = 3
+HALO_SHIFT = (0, 2, 5, 0)  # how many ramp steps darker the rain is at each halo level
 KATAKANA = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:.=*+-<>"
 ASCII = "01234567890ABCDEFXYZ:.=*+-<>|/\\#$%&"
 
@@ -395,31 +397,29 @@ class Rain:
 
     def step(self, dt):
         self.t += dt
-        self.tick = int(self.t * 4)  # glyphs mutate ~4x a second
+        self.tick = int(self.t * 8)  # trail glyphs mutate ~8x a second
         for i, d in enumerate(self.drops):
             d[0] += d[1] * dt
             if d[0] - d[2] > self.h:
                 self.drops[i] = self._new()
 
-    def draw(self, win, attrs):
-        chars, n = self.chars, len(self.chars)
+    def draw(self, win, ramp, mask):
+        """ramp: attrs from white head down to a faint tail. mask: per-cell halo level (see App.halo_mask)."""
+        chars, n, w = self.chars, len(self.chars), self.w
+        last = len(ramp) - 1
         for x, (pos, _, length, seed) in enumerate(self.drops):
             head = int(pos)
             for k in range(length + 1):
                 y = head - k
                 if y < 0 or y >= self.h:
                     continue
-                flick = self.tick if (x + y) % 4 == 0 else 0
+                level = mask[y * w + x]
+                if level == HALO_HIDDEN:
+                    continue
+                flick = self.tick if (x + y) % 3 == 0 and k else 0  # the head glyph stays put
                 ch = chars[(seed + y * 7919 + flick * 104729) % n]
-                if k == 0:
-                    attr = attrs["head"]
-                elif k < 3:
-                    attr = attrs["bright"]
-                elif k < length // 2:
-                    attr = attrs["mid"]
-                else:
-                    attr = attrs["tail"]
-                put(win, y, x, ch, attr)
+                idx = 0 if k == 0 else 1 + (k * (last - 2)) // length  # 1 .. last-1
+                put(win, y, x, ch, ramp[min(last, idx + HALO_SHIFT[level])])
 
 
 # ------------------------------------------------------------------- ui -----
@@ -439,6 +439,10 @@ def put(win, y, x, s, attr=0):
             pass
 
 
+RAIN_256 = (231, 157, 120, 84, 46, 40, 34, 28, 22, 235)  # white head -> green -> fades into the background
+GRADIENT_256 = (46, 82, 118, 154, 190, 226, 220, 214, 208, 202, 196)  # green -> yellow -> red
+
+
 def init_colors():
     curses.start_color()
     try:
@@ -450,7 +454,7 @@ def init_colors():
     G, C, M, Y, R, W = (curses.COLOR_GREEN, curses.COLOR_CYAN, curses.COLOR_MAGENTA,
                         curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_WHITE)
     spec = {
-        "head": (231, W), "bright": (46, G), "mid": (34, G), "tail": (22, G),
+        "glow": (90, M),
         "clock": (51, C), "date": (201, M), "border": (201, M), "label": (51, C),
         "ok": (46, G), "warn": (220, Y), "crit": (196, R), "dim": (244, W),
         "weather": (213, M),
@@ -459,12 +463,27 @@ def init_colors():
     for i, (name, (c256, c8)) in enumerate(spec.items(), 1):
         curses.init_pair(i, c256 if rich else c8, bg)
         attrs[name] = curses.color_pair(i)
-    attrs["head"] |= curses.A_BOLD
     attrs["clock"] |= curses.A_BOLD
     attrs["date"] |= curses.A_BOLD
-    if not rich:
-        attrs["bright"] |= curses.A_BOLD
-        attrs["tail"] |= curses.A_DIM
+
+    next_pair = [len(spec) + 1]
+
+    def ramp(colours):  # [(256-colour, 8-colour, extra attr)] -> attrs
+        out = []
+        for c256, c8, extra in colours:
+            curses.init_pair(next_pair[0], c256 if rich else c8, bg)
+            out.append(curses.color_pair(next_pair[0]) | extra)
+            next_pair[0] += 1
+        return out
+
+    B, D = curses.A_BOLD, curses.A_DIM
+    if rich:
+        attrs["rain"] = ramp([(c, G, 0) for c in RAIN_256])
+        attrs["grad"] = ramp([(c, G, 0) for c in GRADIENT_256])
+    else:
+        attrs["rain"] = ramp([(W, W, B), (G, G, B), (G, G, 0), (G, G, D)])
+        attrs["grad"] = ramp([(G, G, 0), (Y, Y, 0), (R, R, 0)])
+        attrs["glow"] |= D
     return attrs
 
 
@@ -473,9 +492,7 @@ MENU_ITEMS = ("City", "FPS", "Rain", "Glitch", "Glitch rate")
 MENU = " [Q] quit   [R] refresh   [U] units   [S] settings "
 
 
-def bar(frac, width):
-    n = round(max(0.0, min(1.0, frac)) * width)
-    return "█" * n, "░" * (width - n)
+EIGHTHS = " ▏▎▍▌▋▊▉"
 
 
 class App:
@@ -510,8 +527,28 @@ class App:
             rows = render_big(text, scale)
             if glitch:
                 rows = glitch_rows(rows)
-            return [[(row, A["clock"])] for row in rows]
+            return [self.glow_row(row) for row in rows]
         return [[(text.replace("_", "").strip(), A["clock"])]]
+
+    def glow_row(self, row):
+        """Clock row as coloured runs: bright digits with a dim magenta bloom either side."""
+        A = self.A
+        padded = " " + row + " "
+        segs = []
+        for i, ch in enumerate(padded):
+            left = i > 0 and padded[i - 1] != " "
+            right = i + 1 < len(padded) and padded[i + 1] != " "
+            if ch != " ":
+                cell = (ch, A["clock"])
+            elif left or right:
+                cell = ("░", A["glow"])
+            else:
+                cell = (" ", 0)
+            if segs and segs[-1][1] == cell[1]:
+                segs[-1] = (segs[-1][0] + cell[0], cell[1])
+            else:
+                segs.append(cell)
+        return segs
 
     def glitch_active(self):
         """Short bursts every few seconds; timed in seconds so it's FPS-independent."""
@@ -578,17 +615,31 @@ class App:
             out.append(("BAT", pct / 100, f"{pct}%{tag}", self.level(pct, invert=True)))
         return out
 
+    def bar_segments(self, frac, invert=False):
+        """Bar with eighth-block precision, coloured along a gradient by position (battery runs red -> green)."""
+        grad = self.A["grad"][::-1] if invert else self.A["grad"]
+        colour = lambda i: grad[i * len(grad) // BAR_W]
+        total = max(0.0, min(1.0, frac)) * BAR_W
+        whole, part = int(total), int((total % 1) * 8)
+        segs = [("█", colour(i)) for i in range(whole)]
+        if part and whole < BAR_W:
+            segs.append((EIGHTHS[part], colour(whole)))
+        used = len(segs)
+        if used < BAR_W:
+            segs.append(("░" * (BAR_W - used), self.A["dim"]))
+        return segs
+
     def stats_box(self):
         A = self.A
         b = A["border"]
         title = "[ SYS//STATUS ]"
         rows = [[("╔═" + title + "═" * (INNER_W - len(title) - 1) + "╗", b)]]
         for label, frac, text, lvl in self.stat_values():
-            full, empty = bar(frac, BAR_W)
-            rows.append([
-                ("║ ", b), (label + " ", A["label"]), (full, A[lvl]), (empty, A["dim"]),
-                (" " + text.rjust(TEXT_W) + " ", A[lvl]), ("║", b),
-            ])
+            rows.append(
+                [("║ ", b), (label + " ", A["label"])]
+                + self.bar_segments(frac, invert=(label == "BAT"))
+                + [(" " + text.rjust(TEXT_W) + " ", A[lvl]), ("║", b)]
+            )
         rows.append([("╚" + "═" * INNER_W + "╝", b)])
         return rows
 
@@ -636,21 +687,57 @@ class App:
         scr, A = self.scr, self.A
         scr.erase()
         h, w = scr.getmaxyx()
+        if self.modal:
+            rows = self.modal_rows(w)
+            top = max(0, (h - len(rows)) // 2)
+            menu = False
+        else:
+            rows = self.build(h, w, datetime.now())
+            top = max(0, (h - len(rows)) // 2)
+            menu = top + len(rows) < h  # room for the bottom menu
         if self.rain_cfg["enabled"]:
             if not self.rain or (self.rain.h, self.rain.w) != (h, w):
                 self.rain = Rain(h, w, self.chars, self.rain_cfg["speed"])
             self.rain.step(dt)
-            self.rain.draw(scr, A)
-        if self.modal:
-            rows = self.modal_rows(w)
-            self.draw_rows(rows, max(0, (h - len(rows)) // 2), w)
-        else:
-            rows = self.build(h, w, datetime.now())
-            top = max(0, (h - len(rows)) // 2)
-            self.draw_rows(rows, top, w)
-            if top + len(rows) < h:  # bottom menu
-                put(scr, h - 1, 1, MENU, A["dim"])
+            rects = self.row_rects(rows, top, w)
+            if menu:
+                rects.append((h - 1, 1, 1 + len(MENU)))
+            self.rain.draw(scr, A["rain"], self.halo_mask(rects, h, w))
+        self.draw_rows(rows, top, w)
+        if menu:
+            put(scr, h - 1, 1, MENU, A["dim"])
         scr.refresh()
+
+    def row_rects(self, rows, top, w):
+        """[(y, x0, x1)] for every drawn row."""
+        rects = []
+        for i, segs in enumerate(rows):
+            if segs is not None:
+                width = sum(len(t) for t, _ in segs)
+                x = (w - width) // 2
+                rects.append((top + i, x, x + width))
+        return rects
+
+    def halo_mask(self, rects, h, w):
+        """Per-cell rain level: 0 full, 1-2 progressively fainter near text, 3 hidden behind it."""
+        mask = bytearray(h * w)
+
+        def paint(y, x0, x1, level):
+            x0, x1 = max(0, x0), min(w, x1)
+            if 0 <= y < h and x0 < x1:
+                mask[y * w + x0 : y * w + x1] = bytes([level]) * (x1 - x0)
+
+        # Outer halos first so the inner (stronger) ones overwrite them.
+        for y, x0, x1 in rects:
+            for dy in (-1, 0, 1):
+                paint(y + dy, x0 - 8, x1 + 8, 1)
+        for y, x0, x1 in rects:
+            paint(y, x0 - 5, x1 + 5, 2)
+            paint(y - 1, x0 - 3, x1 + 3, 2)
+            paint(y + 1, x0 - 3, x1 + 3, 2)
+        for y, x0, x1 in rects:
+            paint(y, x0 - 2, x1 + 2, HALO_HIDDEN)
+        return mask
 
     def draw_rows(self, rows, top, w):
         for i, segs in enumerate(rows):
@@ -658,7 +745,7 @@ class App:
                 continue
             width = sum(len(t) for t, _ in segs)
             x = (w - width) // 2
-            put(self.scr, top + i, max(0, x - 2), " " * (width + 4))  # knock out the rain behind text
+            put(self.scr, top + i, max(0, x - 2), " " * (width + 4))  # matches the hidden zone in halo_mask
             for text, attr in segs:
                 put(self.scr, top + i, x, text, attr)
                 x += len(text)
