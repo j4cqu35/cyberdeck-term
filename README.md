@@ -9,6 +9,7 @@ system stats over a cyberpunk "matrix rain" background.
   [Open-Meteo](https://open-meteo.com/). No API key needed.
 - **System stats:** CPU, memory, disk, temperature and battery, with bars that go
   green, yellow and red.
+- **Boot sequence:** a one-second `INITIALISING… LINK ESTABLISHED` intro with the rain fading in.
 - **Glitch:** the clock occasionally tears, corrupts, splits into offset cyan and magenta
   copies, and drops out in scan-line flickers, all for a fraction of a second. Rate is
   adjustable, or turn it off.
@@ -61,6 +62,7 @@ apply immediately and are saved.
 | Scanlines | Faint CRT scanlines in the rain on / off (`Enter` toggles) |
 | Glitch | Clock glitch effect on / off (`Enter` toggles) |
 | Glitch rate | Average bursts per second, 0.05-2.00 |
+| Boot intro | The launch intro on / off (`Enter` toggles) |
 
 ### Options
 
@@ -76,6 +78,7 @@ apply immediately and are saved.
 | `--no-rain` | Disable the background |
 | `--no-scanlines` | Disable the CRT scanlines in the rain |
 | `--no-air-quality` | Hide air quality |
+| `--no-boot` | Skip the boot sequence |
 | `--no-glitch` | Disable the clock glitch |
 | `--config PATH` | Use a different config file |
 
@@ -97,6 +100,7 @@ to see the first-launch prompt again.
   "show_seconds": false,
   "weather_refresh_minutes": 15,
   "air_quality": true,
+  "boot_sequence": true,
   "disk_path": "/",
   "rain": { "enabled": true, "scanlines": true, "charset": "katakana", "speed": 1.0 }
 }
@@ -111,6 +115,7 @@ to see the first-launch prompt again.
 | `show_seconds` | Show seconds on the clock |
 | `weather_refresh_minutes` | How often weather is fetched |
 | `air_quality` | Show air quality (US AQI and PM2.5) in the weather area |
+| `boot_sequence` | Play the one-second `INITIALISING… LINK ESTABLISHED` intro at launch (any key skips it) |
 | `disk_path` | Mount point shown in the disk bar |
 | `glitch.enabled` | Occasional glitch bursts on the clock |
 | `glitch.rate` | Average bursts per second (0.05-2.0) |

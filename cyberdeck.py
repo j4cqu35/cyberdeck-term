@@ -5,7 +5,7 @@ Python standard library only. System stats come from /proc, /sys, statvfs (what
 `df` uses) and, as a fallback for temperature, `sensors`. Weather comes from the
 Open-Meteo API (no API key needed).
 
-Keys:  q / Esc  quit   s  settings (city, units, air quality, FPS, rain, scanlines, glitch)
+Keys:  q / Esc  quit   s  settings (city, units, air quality, FPS, rain, scanlines, glitch, boot intro)
 
 Config lives at ~/.config/cyberdeck/config.json. With no city configured, the app
 asks for one at launch and saves it there.
@@ -37,6 +37,7 @@ DEFAULTS = {
     "show_seconds": False,
     "weather_refresh_minutes": 15,
     "air_quality": True,
+    "boot_sequence": True,  # ~1s intro at launch; any key skips it
     "disk_path": "/",
     "glitch": {"enabled": True, "rate": 0.35},  # rate: clock glitch bursts per second, on average
     "rain": {"enabled": True, "scanlines": True, "charset": "katakana", "speed": 1.0},  # katakana | ascii
@@ -453,6 +454,12 @@ def glitch_rows(rows):
 # -------------------------------------------------------------- the rain ----
 
 HALO_HIDDEN = 3
+BOOT_SECS = 1.0
+BOOT_LINES = (  # (text, start, fade-ramp attr): typed out over BOOT_TYPE seconds, then faded out at the end
+    ("INITIALISING…", 0.0, "fade_c"),
+    ("LINK ESTABLISHED", 0.45, "fade_g"),
+)
+BOOT_TYPE, BOOT_FADE_IN, BOOT_FADE_OUT, BOOT_RAIN_FADE = 0.3, 0.15, 0.2, 0.8
 SCANLINE_SHIFT = 1  # ramp steps darker on every other rain row (CRT effect)
 HALO_SHIFT = (0, 2, 5, 0)  # how many ramp steps darker the rain is at each halo level
 KATAKANA = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:.=*+-<>"
@@ -479,7 +486,7 @@ class Rain:
             if d[0] - d[2] > self.h:
                 self.drops[i] = self._new()
 
-    def draw(self, win, ramp, mask, scanlines=False):
+    def draw(self, win, ramp, mask, scanlines=False, fade=0):
         """ramp: attrs from white head down to a faint tail. mask: per-cell halo level (see App.halo_mask)."""
         chars, n, w = self.chars, len(self.chars), self.w
         last = len(ramp) - 1
@@ -495,7 +502,7 @@ class Rain:
                 flick = self.tick if (x + y) % 3 == 0 and k else 0  # the head glyph stays put
                 ch = chars[(seed + y * 7919 + flick * 104729) % n]
                 idx = 0 if k == 0 else 1 + (k * (last - 2)) // length  # 1 .. last-1
-                dim = HALO_SHIFT[level] + (SCANLINE_SHIFT if scanlines and y % 2 else 0)
+                dim = HALO_SHIFT[level] + fade + (SCANLINE_SHIFT if scanlines and y % 2 else 0)
                 put(win, y, x, ch, ramp[min(last, idx + dim)])
 
 
@@ -517,6 +524,8 @@ def put(win, y, x, s, attr=0):
 
 
 RAIN_256 = (231, 157, 120, 84, 46, 40, 34, 28, 22, 235)  # white head -> green -> fades into the background
+FADE_C_256 = (23, 30, 37, 44, 51)  # dark -> bright cyan, for the boot text
+FADE_G_256 = (22, 28, 34, 40, 46)  # dark -> bright green
 GRADIENT_256 = (46, 82, 118, 154, 190, 226, 220, 214, 208, 202, 196)  # green -> yellow -> red
 
 
@@ -558,15 +567,19 @@ def init_colors():
     if rich:
         attrs["rain"] = ramp([(c, G, 0) for c in RAIN_256])
         attrs["grad"] = ramp([(c, G, 0) for c in GRADIENT_256])
+        attrs["fade_c"] = ramp([(c, C, 0) for c in FADE_C_256])
+        attrs["fade_g"] = ramp([(c, G, 0) for c in FADE_G_256])
     else:
         attrs["rain"] = ramp([(W, W, B), (G, G, B), (G, G, 0), (G, G, D)])
         attrs["grad"] = ramp([(G, G, 0), (Y, Y, 0), (R, R, 0)])
+        attrs["fade_c"] = ramp([(C, C, D), (C, C, 0), (C, C, B)])
+        attrs["fade_g"] = ramp([(G, G, D), (G, G, 0), (G, G, B)])
     return attrs
 
 
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
 REFRESH_CHOICES = (5, 10, 15, 30, 60)  # minutes
-MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "FPS", "Rain", "Scanlines", "Glitch", "Glitch rate")
+MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "FPS", "Rain", "Scanlines", "Glitch", "Glitch rate", "Boot intro")
 TITLE = "▌CYBERDECK//v6 ▐"
 MENU = " [Q] quit   [S] settings "
 
@@ -581,6 +594,7 @@ class App:
         self.fps = clamp_fps(cfg["fps"])
         self.modal = None
         self.glitch = {"until": 0.0}  # the current burst
+        self.boot_t0 = None  # set in run() while the boot sequence is playing
         self.rain = None
         self.rain_cfg = cfg["rain"]
         self.chars = ASCII if self.rain_cfg["charset"] == "ascii" else KATAKANA
@@ -641,6 +655,31 @@ class App:
             "split": burst["dx"] if t < burst["split_until"] else 0,
             "scan": burst["scan"] and random.random() < 0.4,  # flickers on and off within the burst
         }
+
+    def boot_time(self):
+        """Seconds into the boot sequence, or None if it isn't playing."""
+        if self.boot_t0 is None:
+            return None
+        t = time.monotonic() - self.boot_t0
+        if t >= BOOT_SECS:
+            self.boot_t0 = None
+            return None
+        return t
+
+    def boot_rows(self, t):
+        """The boot text: each line types itself out, and both fade away at the end."""
+        out = []
+        for text, start, ramp_name in BOOT_LINES:
+            ramp = self.A[ramp_name]
+            typed = min(len(text), max(0, int((t - start) / BOOT_TYPE * len(text))))
+            fade = min(1.0, max(0.0, (t - start) / BOOT_FADE_IN), max(0.0, (BOOT_SECS - t) / BOOT_FADE_OUT))
+            attr = ramp[round(fade * (len(ramp) - 1))]
+            out.append([(text[:typed].ljust(len(text)), attr)])  # padded, so the layout doesn't jump
+        return [out[0], None, out[1]]
+
+    def rule_row(self):
+        A = self.A
+        return [[("─── ", A["border"]), ("◆", A["clock"]), (" ───", A["border"])]]
 
     def date_row(self, now):
         s = now.strftime("%A  %d %B %Y").upper()
@@ -753,14 +792,15 @@ class App:
                 scale = s
                 break
         box_ok = w >= INNER_W + 4
-        candidates = [(0, 1, False)]
+        candidates = [(0, 1, False, False)]
         if scale:
             full = 4 if self.cfg["air_quality"] else 3  # weather lines
-            candidates = [(scale, full, box_ok), (scale, full, False), (scale, 3, False), (scale, 1, False)] + candidates
-        for sc, wlines, box in candidates:
+            candidates = [(scale, full, box_ok, True), (scale, full, False, True), (scale, 3, False, True),
+                          (scale, 1, False, False)] + candidates
+        for sc, wlines, box, rule in candidates:  # rule: the underline below the date
             sections = [
                 self.clock_rows(now, sc, glitch, w),
-                self.date_row(now),
+                self.date_row(now) + (self.rule_row() if rule else []),
                 self.weather_rows(wlines),
                 self.stats_box() if box else self.stats_line(),
             ]
@@ -780,7 +820,12 @@ class App:
         scr, A = self.scr, self.A
         scr.erase()
         h, w = scr.getmaxyx()
-        if self.modal:
+        boot_t = self.boot_time()
+        if boot_t is not None:
+            rows = self.boot_rows(boot_t)
+            top = max(0, (h - len(rows)) // 2)
+            menu = False
+        elif self.modal:
             rows = self.modal_rows(w)
             top = max(0, (h - len(rows)) // 2)
             menu = False
@@ -788,7 +833,7 @@ class App:
             rows = self.build(h, w, datetime.now())
             top = max(0, (h - len(rows)) // 2)
             menu = top + len(rows) < h  # room for the bottom menu
-        header = self.header(w) if top > 0 else []  # only when row 0 is free
+        header = self.header(w) if top > 0 and boot_t is None else []  # only when row 0 is free
         if self.rain_cfg["enabled"]:
             if not self.rain or (self.rain.h, self.rain.w) != (h, w):
                 self.rain = Rain(h, w, self.chars, self.rain_cfg["speed"])
@@ -797,7 +842,8 @@ class App:
             if menu:
                 rects.append((h - 1, 1, 1 + len(MENU)))
             rects += [(0, x, x + len(t)) for x, t in header]
-            self.rain.draw(scr, A["rain"], self.halo_mask(rects, h, w), self.rain_cfg["scanlines"])
+            fade = 0 if boot_t is None else round(6 * max(0.0, 1 - boot_t / BOOT_RAIN_FADE))  # rain fades in
+            self.rain.draw(scr, A["rain"], self.halo_mask(rects, h, w), self.rain_cfg["scanlines"], fade)
         self.draw_rows(rows, top, w)
         for (x, text), attr in zip(header, (A["date"], A["label"])):
             put(scr, 0, x, text, attr)
@@ -880,6 +926,7 @@ class App:
             onoff(self.rain_cfg["scanlines"]),
             onoff(g["enabled"]),
             f"◀ {g['rate']:.2f}/s ▶",
+            onoff(self.cfg["boot_sequence"]),
         ]
 
     def change_setting(self, idx, d):
@@ -919,6 +966,9 @@ class App:
         elif name == "Glitch":
             g["enabled"] = not g["enabled"]
             save_config(self.config_file, {"glitch": {"enabled": g["enabled"]}})
+        elif name == "Boot intro":
+            self.cfg["boot_sequence"] = not self.cfg["boot_sequence"]
+            save_config(self.config_file, {"boot_sequence": self.cfg["boot_sequence"]})
         elif name == "Glitch rate":
             g["rate"] = round(max(GLITCH_MIN, min(GLITCH_MAX, g["rate"] + (d or 1) * GLITCH_STEP)), 2)
             save_config(self.config_file, {"glitch": {"rate": g["rate"]}})
@@ -1022,6 +1072,8 @@ class App:
         if not self.weather.has_location():
             self.open_city_prompt(first_run=True)
         last_stats, last_frame = 0.0, time.monotonic()
+        if self.cfg["boot_sequence"]:
+            self.boot_t0 = last_frame
         while True:
             # Sleep only until the next frame is due; a keypress wakes us early.
             wait = last_frame + 1.0 / self.fps - time.monotonic()
@@ -1029,6 +1081,9 @@ class App:
             key = self.read_key()
             if key == curses.KEY_RESIZE:
                 self.rain = None
+            elif self.boot_t0 is not None:
+                if key is not None:  # any key skips the intro
+                    self.boot_t0 = None
             elif self.modal:
                 if key is not None:
                     self.modal_key(key)
@@ -1060,6 +1115,7 @@ def main():
     ap.add_argument("--no-rain", action="store_true")
     ap.add_argument("--no-scanlines", action="store_true", help="no CRT scanlines in the rain")
     ap.add_argument("--no-air-quality", action="store_true", help="hide air quality")
+    ap.add_argument("--no-boot", action="store_true", help="skip the boot sequence")
     ap.add_argument("--no-glitch", action="store_true", help="disable the clock glitch")
     args = ap.parse_args()
 
@@ -1081,6 +1137,8 @@ def main():
         cfg["rain"]["charset"] = "ascii"
     if args.no_air_quality:
         cfg["air_quality"] = False
+    if args.no_boot:
+        cfg["boot_sequence"] = False
     if args.no_glitch:
         cfg["glitch"]["enabled"] = False
     if args.no_scanlines:
