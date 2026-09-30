@@ -5,7 +5,7 @@ Python standard library only. System stats come from /proc, /sys, statvfs (what
 `df` uses) and, as a fallback for temperature, `sensors`. Weather comes from the
 Open-Meteo API (no API key needed).
 
-Keys:  q / Esc  quit   s  settings (city, units, air quality, FPS, rain, glitch)
+Keys:  q / Esc  quit   s  settings (city, units, air quality, FPS, rain, scanlines, glitch)
 
 Config lives at ~/.config/cyberdeck/config.json. With no city configured, the app
 asks for one at launch and saves it there.
@@ -39,7 +39,7 @@ DEFAULTS = {
     "air_quality": True,
     "disk_path": "/",
     "glitch": {"enabled": True, "rate": 0.35},  # rate: clock glitch bursts per second, on average
-    "rain": {"enabled": True, "charset": "katakana", "speed": 1.0},  # katakana | ascii
+    "rain": {"enabled": True, "scanlines": True, "charset": "katakana", "speed": 1.0},  # katakana | ascii
 }
 
 # ---------------------------------------------------------------- config ----
@@ -453,6 +453,7 @@ def glitch_rows(rows):
 # -------------------------------------------------------------- the rain ----
 
 HALO_HIDDEN = 3
+SCANLINE_SHIFT = 1  # ramp steps darker on every other rain row (CRT effect)
 HALO_SHIFT = (0, 2, 5, 0)  # how many ramp steps darker the rain is at each halo level
 KATAKANA = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:.=*+-<>"
 ASCII = "01234567890ABCDEFXYZ:.=*+-<>|/\\#$%&"
@@ -478,7 +479,7 @@ class Rain:
             if d[0] - d[2] > self.h:
                 self.drops[i] = self._new()
 
-    def draw(self, win, ramp, mask):
+    def draw(self, win, ramp, mask, scanlines=False):
         """ramp: attrs from white head down to a faint tail. mask: per-cell halo level (see App.halo_mask)."""
         chars, n, w = self.chars, len(self.chars), self.w
         last = len(ramp) - 1
@@ -494,7 +495,8 @@ class Rain:
                 flick = self.tick if (x + y) % 3 == 0 and k else 0  # the head glyph stays put
                 ch = chars[(seed + y * 7919 + flick * 104729) % n]
                 idx = 0 if k == 0 else 1 + (k * (last - 2)) // length  # 1 .. last-1
-                put(win, y, x, ch, ramp[min(last, idx + HALO_SHIFT[level])])
+                dim = HALO_SHIFT[level] + (SCANLINE_SHIFT if scanlines and y % 2 else 0)
+                put(win, y, x, ch, ramp[min(last, idx + dim)])
 
 
 # ------------------------------------------------------------------- ui -----
@@ -564,7 +566,7 @@ def init_colors():
 
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
 REFRESH_CHOICES = (5, 10, 15, 30, 60)  # minutes
-MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "FPS", "Rain", "Glitch", "Glitch rate")
+MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "FPS", "Rain", "Scanlines", "Glitch", "Glitch rate")
 TITLE = "▌CYBERDECK//v6 ▐"
 MENU = " [Q] quit   [S] settings "
 
@@ -795,7 +797,7 @@ class App:
             if menu:
                 rects.append((h - 1, 1, 1 + len(MENU)))
             rects += [(0, x, x + len(t)) for x, t in header]
-            self.rain.draw(scr, A["rain"], self.halo_mask(rects, h, w))
+            self.rain.draw(scr, A["rain"], self.halo_mask(rects, h, w), self.rain_cfg["scanlines"])
         self.draw_rows(rows, top, w)
         for (x, text), attr in zip(header, (A["date"], A["label"])):
             put(scr, 0, x, text, attr)
@@ -875,6 +877,7 @@ class App:
             onoff(self.cfg["air_quality"]),
             f"◀ {self.fps} ▶",
             onoff(self.rain_cfg["enabled"]),
+            onoff(self.rain_cfg["scanlines"]),
             onoff(g["enabled"]),
             f"◀ {g['rate']:.2f}/s ▶",
         ]
@@ -910,6 +913,9 @@ class App:
         elif name == "Rain":
             self.rain_cfg["enabled"] = not self.rain_cfg["enabled"]
             save_config(self.config_file, {"rain": {"enabled": self.rain_cfg["enabled"]}})
+        elif name == "Scanlines":
+            self.rain_cfg["scanlines"] = not self.rain_cfg["scanlines"]
+            save_config(self.config_file, {"rain": {"scanlines": self.rain_cfg["scanlines"]}})
         elif name == "Glitch":
             g["enabled"] = not g["enabled"]
             save_config(self.config_file, {"glitch": {"enabled": g["enabled"]}})
@@ -1052,6 +1058,7 @@ def main():
     ap.add_argument("--seconds", action="store_true", help="show seconds")
     ap.add_argument("--ascii", action="store_true", help="ASCII rain instead of katakana")
     ap.add_argument("--no-rain", action="store_true")
+    ap.add_argument("--no-scanlines", action="store_true", help="no CRT scanlines in the rain")
     ap.add_argument("--no-air-quality", action="store_true", help="hide air quality")
     ap.add_argument("--no-glitch", action="store_true", help="disable the clock glitch")
     args = ap.parse_args()
@@ -1076,6 +1083,8 @@ def main():
         cfg["air_quality"] = False
     if args.no_glitch:
         cfg["glitch"]["enabled"] = False
+    if args.no_scanlines:
+        cfg["rain"]["scanlines"] = False
     if args.no_rain:
         cfg["rain"]["enabled"] = False
 

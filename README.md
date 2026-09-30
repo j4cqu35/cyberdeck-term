@@ -12,8 +12,8 @@ system stats over a cyberpunk "matrix rain" background.
 - **Glitch:** the clock occasionally tears, corrupts, splits into offset cyan and magenta
   copies, and drops out in scan-line flickers, all for a fraction of a second. Rate is
   adjustable, or turn it off.
-- **Matrix rain:** falling katakana (or ASCII) in the background, with an adjustable
-  frame rate. It can be turned off.
+- **Matrix rain:** falling katakana (or ASCII) in the background, with optional CRT
+  scanlines and an adjustable frame rate. It can be turned off.
 
 Python standard library only. Stats are read straight from `/proc`, `/sys` and
 `statvfs` (what `df` uses), with `sensors` as a fallback for temperature.
@@ -58,6 +58,7 @@ apply immediately and are saved.
 | Air quality | Show the air quality line on / off (`Enter` toggles) |
 | FPS | 5-60, in steps of 5 |
 | Rain | Matrix rain on / off (`Enter` toggles) |
+| Scanlines | Faint CRT scanlines in the rain on / off (`Enter` toggles) |
 | Glitch | Clock glitch effect on / off (`Enter` toggles) |
 | Glitch rate | Average bursts per second, 0.05-2.00 |
 
@@ -73,6 +74,7 @@ apply immediately and are saved.
 | `--seconds` | Show seconds |
 | `--ascii` | ASCII rain instead of katakana (use this if your font shows boxes) |
 | `--no-rain` | Disable the background |
+| `--no-scanlines` | Disable the CRT scanlines in the rain |
 | `--no-air-quality` | Hide air quality |
 | `--no-glitch` | Disable the clock glitch |
 | `--config PATH` | Use a different config file |
@@ -96,7 +98,7 @@ to see the first-launch prompt again.
   "weather_refresh_minutes": 15,
   "air_quality": true,
   "disk_path": "/",
-  "rain": { "enabled": true, "charset": "katakana", "speed": 1.0 }
+  "rain": { "enabled": true, "scanlines": true, "charset": "katakana", "speed": 1.0 }
 }
 ```
 
@@ -113,6 +115,7 @@ to see the first-launch prompt again.
 | `glitch.enabled` | Occasional glitch bursts on the clock |
 | `glitch.rate` | Average bursts per second (0.05-2.0) |
 | `rain.enabled` | Show the matrix rain |
+| `rain.scanlines` | Dim every other rain row slightly for a CRT look |
 | `rain.charset` | `katakana` or `ascii` |
 | `rain.speed` | Rain speed multiplier |
 
