@@ -17,6 +17,7 @@ import json
 import locale
 import os
 import random
+import socket
 import subprocess
 import threading
 import time
@@ -157,6 +158,20 @@ def read_temp_sensors():
     return max(temps) if temps else None
 
 
+def read_uptime():
+    """'3d 04h 12m' / '4h 12m' / '12m', or '--' if /proc/uptime is unreadable."""
+    try:
+        secs = int(float((_read("/proc/uptime") or "").split()[0]))
+    except (IndexError, ValueError):
+        return "--"
+    days, rest = divmod(secs, 86400)
+    hours, rest = divmod(rest, 3600)
+    mins = rest // 60
+    if days:
+        return f"{days}d {hours:02d}h {mins:02d}m"
+    return f"{hours}h {mins:02d}m" if hours else f"{mins}m"
+
+
 def read_battery():
     for bat in sorted(Path("/sys/class/power_supply").glob("BAT*")):
         cap = _read(bat / "capacity")
@@ -173,6 +188,8 @@ class Stats:
         self.disk = (0, 0)
         self.temp = None
         self.bat = None
+        self.host = socket.gethostname().split(".")[0]
+        self.uptime = read_uptime()
         self._prev = read_cpu_times()
         self._ticks = 0
         self._use_sensors = True
@@ -186,6 +203,7 @@ class Stats:
         self.mem = read_meminfo()
         self.disk = read_disk(self.disk_path)
         self.bat = read_battery()
+        self.uptime = read_uptime()
         if self._ticks % 2 == 0:
             self.temp = read_temp_sysfs()
             if self.temp is None and self._use_sensors and self._ticks % 5 == 0:
@@ -487,6 +505,7 @@ def init_colors():
 
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
 MENU_ITEMS = ("City", "FPS", "Rain", "Glitch", "Glitch rate")
+TITLE = "▌CYBERDECK//v6 ▐"
 MENU = " [Q] quit   [R] refresh   [U] units   [S] settings "
 
 
@@ -673,6 +692,7 @@ class App:
             rows = self.build(h, w, datetime.now())
             top = max(0, (h - len(rows)) // 2)
             menu = top + len(rows) < h  # room for the bottom menu
+        header = self.header(w) if top > 0 else []  # only when row 0 is free
         if self.rain_cfg["enabled"]:
             if not self.rain or (self.rain.h, self.rain.w) != (h, w):
                 self.rain = Rain(h, w, self.chars, self.rain_cfg["speed"])
@@ -680,11 +700,22 @@ class App:
             rects = self.row_rects(rows, top, w)
             if menu:
                 rects.append((h - 1, 1, 1 + len(MENU)))
+            rects += [(0, x, x + len(t)) for x, t in header]
             self.rain.draw(scr, A["rain"], self.halo_mask(rects, h, w))
         self.draw_rows(rows, top, w)
+        for (x, text), attr in zip(header, (A["date"], A["label"])):
+            put(scr, 0, x, text, attr)
         if menu:
             put(scr, h - 1, 1, MENU, A["dim"])
         scr.refresh()
+
+    def header(self, w):
+        """[(x, text)] for the top-left title and top-right host//uptime, if they fit."""
+        out = [(1, TITLE)]
+        right = f"{self.stats.host}//{self.stats.uptime}"
+        if 1 + len(TITLE) + 2 + len(right) + 1 <= w:
+            out.append((w - 1 - len(right), right))
+        return out
 
     def row_rects(self, rows, top, w):
         """[(y, x0, x1)] for every drawn row."""
