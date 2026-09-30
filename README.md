@@ -1,2 +1,110 @@
 # cyberdeck-term
-A small terminal based application that displays a customizable interface with time, date, weather, and system stats with an optional matrix code background
+
+A small terminal application that shows a large clock, the date, live weather and
+system stats over a cyberpunk "matrix rain" background.
+
+- **Clock and date:** big block-digit clock, centered, with a blinking colon.
+  24-hour or 12-hour, optional seconds.
+- **Weather:** current conditions, high/low, feels-like, humidity and wind from
+  [Open-Meteo](https://open-meteo.com/). No API key needed.
+- **System stats:** CPU, memory, disk, temperature and battery, with bars that go
+  green, yellow and red.
+- **Matrix rain:** falling katakana (or ASCII) in the background, with an adjustable
+  frame rate. It can be turned off.
+
+Python standard library only. Stats are read straight from `/proc`, `/sys` and
+`statvfs` (what `df` uses), with `sensors` as a fallback for temperature.
+
+## Requirements
+
+- Linux (developed for Arch)
+- Python 3.8+ (with `curses`, included in the standard Arch `python` package)
+- A terminal with UTF-8 and 256-colour support
+- Optional: `lm_sensors` if your temperature isn't exposed under `/sys`
+
+## Usage
+
+```bash
+python3 cyberdeck.py
+```
+
+On first launch, with no city configured, it asks for one and saves it. You can
+enter `Paris` or `Paris, FR` to pick between places with the same name.
+
+To run it from anywhere:
+
+```bash
+install -Dm755 cyberdeck.py ~/.local/bin/cyberdeck
+```
+
+### Keys
+
+| Key | Action |
+| --- | --- |
+| `q` / `Esc` | Quit |
+| `r` | Refresh weather now |
+| `u` | Toggle metric / imperial |
+| `s` | Settings menu |
+
+In settings, `↑`/`↓` selects an item. Press `Enter` on **City** to change it.
+On **FPS**, use `←`/`→` (or `-`/`+`) to adjust in steps of 5, from 5 to 60.
+Changes apply immediately and are saved.
+
+### Options
+
+| Flag | Description |
+| --- | --- |
+| `--city NAME` | Weather location by name (this run only) |
+| `--lat`, `--lon` | Weather location by coordinates |
+| `--units {metric,imperial}` | Units for temperature and wind |
+| `--fps N` | Frames per second (5-60) |
+| `--12h` | 12-hour clock |
+| `--seconds` | Show seconds |
+| `--ascii` | ASCII rain instead of katakana (use this if your font shows boxes) |
+| `--no-rain` | Disable the background |
+| `--config PATH` | Use a different config file |
+
+Flags apply to the current run only and are not saved.
+
+## Configuration
+
+Settings are stored in `~/.config/cyberdeck/config.json` (or under
+`$XDG_CONFIG_HOME`). The file is created when you first choose a city. Delete it
+to see the first-launch prompt again.
+
+```json
+{
+  "location": { "city": "London", "lat": null, "lon": null },
+  "units": "metric",
+  "fps": 30,
+  "clock_24h": true,
+  "show_seconds": false,
+  "weather_refresh_minutes": 15,
+  "disk_path": "/",
+  "rain": { "enabled": true, "charset": "katakana", "speed": 1.0 }
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `location` | City name, or `lat`/`lon` (which take priority) |
+| `units` | `metric` or `imperial` |
+| `fps` | Frame rate, 5-60 |
+| `clock_24h` | `false` for a 12-hour clock |
+| `show_seconds` | Show seconds on the clock |
+| `weather_refresh_minutes` | How often weather is fetched |
+| `disk_path` | Mount point shown in the disk bar |
+| `rain.enabled` | Show the matrix rain |
+| `rain.charset` | `katakana` or `ascii` |
+| `rain.speed` | Rain speed multiplier |
+
+## Notes
+
+- The layout adapts to the terminal size: the stats box collapses to a single
+  line, then the clock to plain text, as the window gets smaller.
+- If the network is down, the last weather reading stays on screen marked
+  `[OFFLINE]` and it retries every minute.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).
