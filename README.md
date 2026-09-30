@@ -9,7 +9,7 @@ system stats over a cyberpunk "matrix rain" background.
   [Open-Meteo](https://open-meteo.com/). No API key needed.
 - **System stats:** CPU, memory, disk, temperature and battery, with bars that go
   green, yellow and red.
-- **Boot sequence:** a one-second `INITIALISING… LINK ESTABLISHED` intro with the rain fading in.
+- **Boot sequence:** a three-second `INITIALISING… LINK ESTABLISHED` intro with the rain fading in.
 - **Glitch:** the clock occasionally tears, corrupts, splits into offset cyan and magenta
   copies, and drops out in scan-line flickers, all for a fraction of a second. Rate is
   adjustable, or turn it off.
@@ -115,7 +115,7 @@ to see the first-launch prompt again.
 | `show_seconds` | Show seconds on the clock |
 | `weather_refresh_minutes` | How often weather is fetched |
 | `air_quality` | Show air quality (US AQI and PM2.5) in the weather area |
-| `boot_sequence` | Play the one-second `INITIALISING… LINK ESTABLISHED` intro at launch (any key skips it) |
+| `boot_sequence` | Play the three-second `INITIALISING… LINK ESTABLISHED` intro at launch (any key skips it) |
 | `disk_path` | Mount point shown in the disk bar |
 | `glitch.enabled` | Occasional glitch bursts on the clock |
 | `glitch.rate` | Average bursts per second (0.05-2.0) |

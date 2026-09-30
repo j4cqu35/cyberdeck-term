@@ -37,7 +37,7 @@ DEFAULTS = {
     "show_seconds": False,
     "weather_refresh_minutes": 15,
     "air_quality": True,
-    "boot_sequence": True,  # ~1s intro at launch; any key skips it
+    "boot_sequence": True,  # ~3s intro at launch; any key skips it
     "disk_path": "/",
     "glitch": {"enabled": True, "rate": 0.35},  # rate: clock glitch bursts per second, on average
     "rain": {"enabled": True, "scanlines": True, "charset": "katakana", "speed": 1.0},  # katakana | ascii
@@ -454,12 +454,12 @@ def glitch_rows(rows):
 # -------------------------------------------------------------- the rain ----
 
 HALO_HIDDEN = 3
-BOOT_SECS = 1.0
+BOOT_SECS = 3.0
 BOOT_LINES = (  # (text, start, fade-ramp attr): typed out over BOOT_TYPE seconds, then faded out at the end
     ("INITIALISING…", 0.0, "fade_c"),
-    ("LINK ESTABLISHED", 0.45, "fade_g"),
+    ("LINK ESTABLISHED", 1.35, "fade_g"),
 )
-BOOT_TYPE, BOOT_FADE_IN, BOOT_FADE_OUT, BOOT_RAIN_FADE = 0.3, 0.15, 0.2, 0.8
+BOOT_TYPE, BOOT_FADE_IN, BOOT_FADE_OUT, BOOT_RAIN_FADE = 0.9, 0.45, 0.6, 2.4
 SCANLINE_SHIFT = 1  # ramp steps darker on every other rain row (CRT effect)
 HALO_SHIFT = (0, 2, 5, 0)  # how many ramp steps darker the rain is at each halo level
 KATAKANA = "ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:.=*+-<>"
