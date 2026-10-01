@@ -5,16 +5,18 @@ Python standard library only. System stats come from /proc, /sys, statvfs (what
 `df` uses) and, as a fallback for temperature, `sensors`. Weather comes from the
 Open-Meteo API (no API key needed).
 
-Keys:  q / Esc  quit   s  settings (city, units, air quality, theme, FPS, rain, scanlines, glitch, boot intro)
+Keys:  q / Esc  quit   s  settings (city, units, air quality, theme, FPS, rain, scanlines, bass rain, spectrum, glitch, boot intro)
 
 Config lives at ~/.config/cyberdeck/config.json. With no city configured, the app
 asks for one at launch and saves it there.
 """
 import argparse
+import array
 import copy
 import curses
 import json
 import locale
+import math
 import os
 import random
 import socket
@@ -38,6 +40,7 @@ DEFAULTS = {
     "weather_refresh_minutes": 15,
     "air_quality": True,
     "theme": "cyan-magenta",  # cyan-magenta | amber | matrix | mono | synthwave
+    "audio": {"spectrum": True, "bass_rain": False},  # needs `parec` (libpulse); silent if unavailable
     "boot_sequence": True,  # ~3s intro at launch; any key skips it
     "disk_path": "/",
     "glitch": {"enabled": True, "rate": 0.35},  # rate: clock glitch bursts per second, on average
@@ -487,7 +490,7 @@ class Rain:
             if d[0] - d[2] > self.h:
                 self.drops[i] = self._new()
 
-    def draw(self, win, ramp, mask, scanlines=False, fade=0):
+    def draw(self, win, ramp, mask, scanlines=False, fade=0, boost=0):
         """ramp: attrs from white head down to a faint tail. mask: per-cell halo level (see App.halo_mask)."""
         chars, n, w = self.chars, len(self.chars), self.w
         last = len(ramp) - 1
@@ -504,7 +507,122 @@ class Rain:
                 ch = chars[(seed + y * 7919 + flick * 104729) % n]
                 idx = 0 if k == 0 else 1 + (k * (last - 2)) // length  # 1 .. last-1
                 dim = HALO_SHIFT[level] + fade + (SCANLINE_SHIFT if scanlines and y % 2 else 0)
-                put(win, y, x, ch, ramp[min(last, idx + dim)])
+                put(win, y, x, ch, ramp[min(last, max(0, idx + dim - boost))])
+
+
+SPEC_H = 3  # rows the spectrum is drawn in (bottom-right corner)
+
+
+class Audio:
+    """Spectrum levels for whatever is playing, read from the default monitor source with `parec`.
+
+    Pure Python: a Goertzel filter per band over a 512-sample window, ~30 times a second.
+    """
+
+    RATE, WINDOW, BANDS = 16000, 512, 24
+    CMD = ["parec", "-d", "@DEFAULT_MONITOR@", "--format=s16le", f"--rate={RATE}", "--channels=1", "--latency-msec=20"]
+    RANGE_DB, TILT_DB, GATE_DB = 40.0, 6.0, -65.0  # dynamic range shown; treble boost; below this is silence
+
+    def __init__(self):
+        n, bands = self.WINDOW, self.BANDS
+        self._hann = [(0.5 - 0.5 * math.cos(2 * math.pi * i / (n - 1))) / 32768 for i in range(n)]
+        freqs = [45 * (7000 / 45) ** ((i + 0.5) / bands) for i in range(bands)]  # log-spaced, 45 Hz - 7 kHz
+        self._coeffs = [2 * math.cos(2 * math.pi * f / self.RATE) for f in freqs]
+        self.levels = [0.0] * bands  # 0..1 per band, already smoothed (fast attack, slow decay)
+        self.bass = self.kick = 0.0  # smoothed low-band level / short-lived bass-hit pulse
+        self.state = "off"  # off | starting | live | unavailable
+        self._ref, self._avg, self._stamp = -45.0, 0.0, 0.0
+        self._proc = self._thread = None
+        self._quit = False
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            if not self._quit:
+                return
+            self._thread.join(1.0)  # still shutting down from a recent stop()
+        self._quit = False
+        self.state = "starting"
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._quit = True
+        self.state = "off"
+        self.levels, self.bass, self.kick = [0.0] * self.BANDS, 0.0, 0.0
+        proc = self._proc
+        if proc:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+    def snapshot(self):
+        """(levels, bass, kick), fading out if the stream has gone quiet (idle sinks send nothing)."""
+        age = time.monotonic() - self._stamp
+        f = 1.0 if age < 0.12 else 0.85 ** ((age - 0.12) * 30)
+        return [v * f for v in self.levels], self.bass * f, self.kick * f
+
+    def _run(self):
+        try:
+            proc = subprocess.Popen(self.CMD, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+        except OSError:  # parec not installed
+            self.state = "unavailable"
+            return
+        self._proc = proc
+        buf, rest, last = array.array("h"), b"", 0.0
+        try:
+            while not self._quit:
+                data = proc.stdout.read(2048)
+                if not data:
+                    break
+                if self.state == "starting":
+                    self.state = "live"
+                data = rest + data
+                cut = len(data) // 2 * 2
+                buf.frombytes(data[:cut])
+                rest = data[cut:]
+                if len(buf) > self.WINDOW:
+                    del buf[: -self.WINDOW]
+                now = time.monotonic()
+                if len(buf) == self.WINDOW and now - last >= 1 / 30:
+                    last = now
+                    self._analyse(buf)
+        finally:
+            self._proc = None
+            try:
+                proc.kill()
+                proc.wait(timeout=1)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            self.state = "off" if self._quit else "unavailable"
+
+    def _analyse(self, samples):
+        bands = self.BANDS
+        if max(map(abs, samples)) < 16:  # digital silence: skip the maths
+            new = [0.0] * bands
+        else:
+            x = [a * b for a, b in zip(samples, self._hann)]
+            scale = 4 / self.WINDOW
+            db = []
+            for i, c in enumerate(self._coeffs):
+                s1 = s2 = 0.0
+                for v in x:
+                    s1, s2 = v + c * s1 - s2, s1
+                power = s1 * s1 + s2 * s2 - c * s1 * s2
+                db.append(20 * math.log10(math.sqrt(max(power, 0.0)) * scale + 1e-9) + self.TILT_DB * i / (bands - 1))
+            top = max(db)
+            if top < self.GATE_DB:
+                new = [0.0] * bands
+            else:  # auto-gain: the reference level follows the loudest band and decays slowly
+                self._ref = max(self._ref - 0.15, top, -50.0)
+                floor = self._ref - self.RANGE_DB
+                new = [min(1.0, max(0.0, (d - floor) / self.RANGE_DB)) for d in db]
+        self.levels = [max(n, o * 0.82) for n, o in zip(new, self.levels)]
+        raw = sum(new[:3]) / 3  # the three lowest bands
+        self._avg = self._avg * 0.85 + raw * 0.15
+        self.kick = max(min(1.0, max(0.0, (raw - self._avg) * 3)), self.kick * 0.75)
+        self.bass = max(raw, self.bass * 0.9)
+        self._stamp = time.monotonic()
 
 
 # ------------------------------------------------------------------- ui -----
@@ -629,12 +747,13 @@ def init_colors(theme=DEFAULT_THEME):
 
 BAR_W, TEXT_W, INNER_W = 20, 11, 38
 REFRESH_CHOICES = (5, 10, 15, 30, 60)  # minutes
-MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "Theme", "FPS", "Rain", "Scanlines", "Glitch", "Glitch rate", "Boot intro")
+MENU_ITEMS = ("City", "Units", "Weather refresh", "Air quality", "Theme", "FPS", "Rain", "Scanlines", "Bass rain", "Spectrum", "Glitch", "Glitch rate", "Boot intro")
 TITLE = "▌CYBERDECK//v0.6▐"
 MENU = " [Q] quit   [S] settings "
 
 
-EIGHTHS = " ▏▎▍▌▋▊▉"
+EIGHTHS = " ▏▎▍▌▋▊▉"  # horizontal partials, for the stats bars
+VBLOCKS = " ▁▂▃▄▅▆▇"  # vertical partials, for the spectrum
 
 
 class App:
@@ -643,6 +762,7 @@ class App:
         self.config_file = config_file
         self.fps = clamp_fps(cfg["fps"])
         self.theme = cfg["theme"] if cfg["theme"] in THEMES else DEFAULT_THEME
+        self.audio = Audio()
         self.modal = None
         self.glitch = {"until": 0.0}  # the current burst
         self.boot_t0 = None  # set in run() while the boot sequence is playing
@@ -885,22 +1005,54 @@ class App:
             top = max(0, (h - len(rows)) // 2)
             menu = top + len(rows) < h  # room for the bottom menu
         header = self.header(w) if top > 0 and boot_t is None else []  # only when row 0 is free
+        rects = self.row_rects(rows, top, w)
+        if menu:
+            rects.append((h - 1, 1, 1 + len(MENU)))
+        rects += [(0, x, x + len(t)) for x, t in header]
+        spectrum = self.spectrum_rects(rects, h, w) if boot_t is None else []
         if self.rain_cfg["enabled"]:
             if not self.rain or (self.rain.h, self.rain.w) != (h, w):
                 self.rain = Rain(h, w, self.chars, self.rain_cfg["speed"])
-            self.rain.step(dt)
-            rects = self.row_rects(rows, top, w)
-            if menu:
-                rects.append((h - 1, 1, 1 + len(MENU)))
-            rects += [(0, x, x + len(t)) for x, t in header]
+            speed = boost = 0
+            if self.cfg["audio"]["bass_rain"] and self.audio.state == "live":
+                _, bass, kick = self.audio.snapshot()
+                speed, boost = 2.0 * bass, round(3 * kick)  # bass speeds the rain up; hits brighten it
+            self.rain.step(dt * (1 + speed))
             fade = 0 if boot_t is None else round(6 * max(0.0, 1 - boot_t / BOOT_RAIN_FADE))  # rain fades in
-            self.rain.draw(scr, A["rain"], self.halo_mask(rects, h, w), self.rain_cfg["scanlines"], fade)
+            self.rain.draw(scr, A["rain"], self.halo_mask(rects + spectrum, h, w),
+                           self.rain_cfg["scanlines"], fade, boost)
         self.draw_rows(rows, top, w)
         for (x, text), attr in zip(header, (A["date"], A["label"])):
             put(scr, 0, x, text, attr)
         if menu:
             put(scr, h - 1, 1, MENU, A["dim"])
+        if spectrum:
+            self.draw_spectrum(spectrum[0][1], h)
         scr.refresh()
+
+    def spectrum_rects(self, content, h, w):
+        """[(y, x0, x1)] for the bottom-right spectrum, or [] if it's off, silent-unavailable, or would collide."""
+        if not self.cfg["audio"]["spectrum"] or self.audio.state != "live":
+            return []
+        x0, y0 = w - 1 - Audio.BANDS, h - SPEC_H
+        if x0 < 1 or y0 < 0 or any(y >= y0 and x1 + 2 >= x0 for y, _, x1 in content):
+            return []
+        return [(y, x0, x0 + Audio.BANDS) for y in range(y0, h)]
+
+    def draw_spectrum(self, x0, h):
+        """Bars rising from the bottom edge, in eighth-block steps, coloured low -> high along the theme gradient."""
+        grad = self.A["grad"]
+        levels, _, _ = self.audio.snapshot()
+        for r in range(SPEC_H):  # r = 0 is the bottom row
+            colour = grad[round((r + 0.5) / SPEC_H * (len(grad) - 1))]
+            cells = []
+            for lv in levels:
+                fill = lv * SPEC_H * 8 - r * 8  # eighths of a cell filled in this row
+                cells.append("█" if fill >= 8 else VBLOCKS[int(fill)] if fill >= 1 else " ")
+            put(self.scr, h - 1 - r, x0, "".join(cells), colour)
+        for i, lv in enumerate(levels):  # faint baseline where a band is empty
+            if lv * SPEC_H * 8 < 1:
+                put(self.scr, h - 1, x0 + i, "▁", self.A["dim"])
 
     def header(self, w):
         """[(x, text)] for the top-left title and top-right host//uptime, if they fit."""
@@ -964,6 +1116,19 @@ class App:
             "text": self.cfg["location"].get("city") or "",
         }
 
+    def audio_value(self, on):
+        if not on:
+            return "OFF"
+        return "ON · NO AUDIO" if self.audio.state == "unavailable" else "ON"
+
+    def sync_audio(self):
+        """Run the capture only while something uses it."""
+        a = self.cfg["audio"]
+        if a["spectrum"] or a["bass_rain"]:
+            self.audio.start()
+        else:
+            self.audio.stop()
+
     def menu_values(self):
         g = self.cfg["glitch"]
         onoff = lambda on: "ON" if on else "OFF"
@@ -976,6 +1141,8 @@ class App:
             f"◀ {self.fps} ▶",
             onoff(self.rain_cfg["enabled"]),
             onoff(self.rain_cfg["scanlines"]),
+            self.audio_value(self.cfg["audio"]["bass_rain"]),
+            self.audio_value(self.cfg["audio"]["spectrum"]),
             onoff(g["enabled"]),
             f"◀ {g['rate']:.2f}/s ▶",
             onoff(self.cfg["boot_sequence"]),
@@ -1021,6 +1188,11 @@ class App:
         elif name == "Scanlines":
             self.rain_cfg["scanlines"] = not self.rain_cfg["scanlines"]
             save_config(self.config_file, {"rain": {"scanlines": self.rain_cfg["scanlines"]}})
+        elif name in ("Bass rain", "Spectrum"):
+            key = "bass_rain" if name == "Bass rain" else "spectrum"
+            self.cfg["audio"][key] = not self.cfg["audio"][key]
+            self.sync_audio()
+            save_config(self.config_file, {"audio": {key: self.cfg["audio"][key]}})
         elif name == "Glitch":
             g["enabled"] = not g["enabled"]
             save_config(self.config_file, {"glitch": {"enabled": g["enabled"]}})
@@ -1129,6 +1301,7 @@ class App:
         self.A = init_colors(self.theme)
         if not self.weather.has_location():
             self.open_city_prompt(first_run=True)
+        self.sync_audio()
         last_stats, last_frame = 0.0, time.monotonic()
         if self.cfg["boot_sequence"]:
             self.boot_t0 = last_frame
@@ -1174,6 +1347,8 @@ def main():
     ap.add_argument("--no-rain", action="store_true")
     ap.add_argument("--no-scanlines", action="store_true", help="no CRT scanlines in the rain")
     ap.add_argument("--no-air-quality", action="store_true", help="hide air quality")
+    ap.add_argument("--no-spectrum", action="store_true", help="hide the audio spectrum")
+    ap.add_argument("--bass-rain", action="store_true", help="make the rain react to bass")
     ap.add_argument("--no-boot", action="store_true", help="skip the boot sequence")
     ap.add_argument("--no-glitch", action="store_true", help="disable the clock glitch")
     args = ap.parse_args()
@@ -1198,6 +1373,10 @@ def main():
         cfg["rain"]["charset"] = "ascii"
     if args.no_air_quality:
         cfg["air_quality"] = False
+    if args.no_spectrum:
+        cfg["audio"]["spectrum"] = False
+    if args.bass_rain:
+        cfg["audio"]["bass_rain"] = True
     if args.no_boot:
         cfg["boot_sequence"] = False
     if args.no_glitch:
@@ -1214,7 +1393,14 @@ def main():
         weather.start()  # otherwise it starts once the city prompt is answered
     stats = Stats(cfg["disk_path"])
     try:
-        curses.wrapper(lambda scr: App(scr, cfg, weather, stats, config_file).run())
+        def run(scr):
+            app = App(scr, cfg, weather, stats, config_file)
+            try:
+                app.run()
+            finally:
+                app.audio.stop()  # don't leave parec running
+
+        curses.wrapper(run)
     except KeyboardInterrupt:
         pass
 

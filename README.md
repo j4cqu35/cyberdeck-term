@@ -10,6 +10,8 @@ system stats over a cyberpunk "matrix rain" background.
 - **System stats:** CPU, memory, disk, temperature and battery, with bars that go
   green, yellow and red.
 - **Boot sequence:** a three-second `INITIALISING… LINK ESTABLISHED` intro with the rain fading in.
+- **Audio spectrum:** a 24-band spectrum of whatever is playing, in the bottom-right corner.
+- **Bass-reactive rain:** optionally, the rain speeds up and brightens with the bass.
 - **Glitch:** the clock occasionally tears, corrupts, splits into offset cyan and magenta
   copies, and drops out in scan-line flickers, all for a fraction of a second. Rate is
   adjustable, or turn it off.
@@ -24,6 +26,7 @@ Python standard library only. Stats are read straight from `/proc`, `/sys` and
 - Linux (developed for Arch)
 - Python 3.8+ (with `curses`, included in the standard Arch `python` package)
 - A terminal with UTF-8 and 256-colour support
+- Optional: `libpulse` (provides `parec`) for the audio spectrum and bass-reactive rain; works with PipeWire via `pipewire-pulse`
 - Optional: `lm_sensors` if your temperature isn't exposed under `/sys`
 
 ## Usage
@@ -61,6 +64,8 @@ apply immediately and are saved.
 | FPS | 5-60, in steps of 5 |
 | Rain | Matrix rain on / off (`Enter` toggles) |
 | Scanlines | Faint CRT scanlines in the rain on / off (`Enter` toggles) |
+| Bass rain | Rain speeds up and brightens with the bass (needs audio) |
+| Spectrum | Audio spectrum, bottom-right corner (needs audio) |
 | Glitch | Clock glitch effect on / off (`Enter` toggles) |
 | Glitch rate | Average bursts per second, 0.05-2.00 |
 | Boot intro | The launch intro on / off (`Enter` toggles) |
@@ -80,6 +85,8 @@ apply immediately and are saved.
 | `--no-rain` | Disable the background |
 | `--no-scanlines` | Disable the CRT scanlines in the rain |
 | `--no-air-quality` | Hide air quality |
+| `--no-spectrum` | Hide the audio spectrum |
+| `--bass-rain` | Make the rain react to bass |
 | `--no-boot` | Skip the boot sequence |
 | `--no-glitch` | Disable the clock glitch |
 | `--config PATH` | Use a different config file |
@@ -115,6 +122,7 @@ to see the first-launch prompt again.
   "show_seconds": false,
   "weather_refresh_minutes": 15,
   "air_quality": true,
+  "audio": { "spectrum": true, "bass_rain": false },
   "boot_sequence": true,
   "disk_path": "/",
   "rain": { "enabled": true, "scanlines": true, "charset": "katakana", "speed": 1.0 }
@@ -131,6 +139,8 @@ to see the first-launch prompt again.
 | `show_seconds` | Show seconds on the clock |
 | `weather_refresh_minutes` | How often weather is fetched |
 | `air_quality` | Show air quality (US AQI and PM2.5) in the weather area |
+| `audio.spectrum` | Show the audio spectrum (needs `parec`) |
+| `audio.bass_rain` | Rain reacts to bass (needs `parec`) |
 | `boot_sequence` | Play the three-second `INITIALISING… LINK ESTABLISHED` intro at launch (any key skips it) |
 | `disk_path` | Mount point shown in the disk bar |
 | `glitch.enabled` | Occasional glitch bursts on the clock |
